@@ -40,7 +40,8 @@ class EpubBuilder:
     def build(self, client: NovelpiaClient, novel: Dict, episodes: List[Dict],
               filename_hint: Optional[str] = None, language: str = "en",
               author_fallback: str = "Unknown", css_text: Optional[str] = None,
-              novel_id: Optional[int] = None) -> Tuple[str, str, int]:
+              novel_id: Optional[int] = None, fetched_results: Optional[List[Dict]] = None,
+              max_workers: int = 1) -> Tuple[str, str, int]:
         nv = novel["result"]["novel"]
         title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
         writers = novel["result"].get("writer_list") or []
@@ -115,14 +116,18 @@ class EpubBuilder:
 
             return str(soup), added_items
 
-        # Fetch episodes in parallel
-        pbar = tqdm(total=len(episodes), desc="Fetching chapters", unit="chap")
-        
-        def update_pbar():
-            pbar.update(1)
+        if fetched_results is None:
+            pbar = tqdm(total=len(episodes), desc="[info] fetching chapters", unit="chap")
 
-        fetched_results = client.fetch_episodes_parallel(episodes, progress_cb=update_pbar)
-        pbar.close()
+            def update_pbar():
+                pbar.update(1)
+
+            fetched_results = client.fetch_episodes_parallel(
+                episodes,
+                max_workers=max_workers,
+                progress_cb=update_pbar,
+            )
+            pbar.close()
 
         for i, res in enumerate(fetched_results, 1):
             if not res or "error" in res:
@@ -189,4 +194,4 @@ class EpubBuilder:
         ensure_dir(book_dir)
         out_path = os.path.join(book_dir, f"{base}.epub")
         epub.write_epub(out_path, book, {})
-        return out_path, title, len(episodes)
+        return out_path, title, len([r for r in fetched_results if r and "error" not in r])

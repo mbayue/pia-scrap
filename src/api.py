@@ -26,7 +26,7 @@ class Tokens:
 
 class NovelpiaClient:
     def __init__(self, email: Optional[str] = None, password: Optional[str] = None,
-                 proxy: Optional[str] = None, timeout: int = 30, throttle: float = 1.5,
+                 proxy: Optional[str] = None, timeout: int = 30, throttle: float = 1.0,
                  userkey: Optional[str] = None, tkey: Optional[str] = None):
         self.s = requests.Session()
         self.s.headers.update(const.SESSION_HEADERS.copy())
@@ -37,7 +37,7 @@ class NovelpiaClient:
         self.email = email
         self.password = password
         # delay seconds between episode-related API calls to reduce 429/500 rate limits
-        self.throttle = max(0.0, float(throttle or 1.5))
+        self.throttle = throttle
         try:
             if not userkey:
                 userkey = uuid.uuid4().hex
@@ -98,9 +98,9 @@ class NovelpiaClient:
         return self.tokens.login_at
 
     def _on_rate_limit(self):
-        """Increase throttle when 429 occurs."""
+        """Increase throttle when rate limit is hit"""
         old = self.throttle
-        self.throttle = min(15.0, self.throttle + 1.5)
+        self.throttle = min(5.0, self.throttle * 1.5)
         if const.HTTP_LOG:
             print(f"[api] Increased throttle from {old}s to {self.throttle}s due to rate limit.")
 
@@ -146,9 +146,9 @@ class NovelpiaClient:
         url = f"{const.API_BASE}/v1/novel/episode"
         headers = merge_login_at({}, self.tokens.login_at)
         params = {"episode_no": episode_no}
-        # Throttle before hitting ticket endpoint to avoid rate limits
+        # Throttle once per chapter before the ticket/content pair.
         if self.throttle:
-            time.sleep(self.throttle + random.uniform(1.0, 1.5))
+            time.sleep(self.throttle + random.uniform(0.1, 0.4))
         r = request_with_retries(
             self.s, "GET", url,
             headers=headers, params=params,
@@ -161,9 +161,6 @@ class NovelpiaClient:
 
     def episode_content(self, token_t: str) -> Dict:
         url = f"{const.API_BASE}/v1/novel/episode/content"
-        # Throttle content fetch too, to be safe
-        if self.throttle:
-            time.sleep(self.throttle + random.uniform(1.0, 1.5))
         r = request_with_retries(
             self.s, "GET", url,
             params={"_t": token_t},
@@ -242,7 +239,7 @@ class NovelpiaClient:
             "idx": idx,
         }
 
-    def fetch_episodes_parallel(self, ep_list: List[Dict[str, Any]], max_workers: int = 3, progress_cb=None) -> List[Dict[str, Any]]:
+    def fetch_episodes_parallel(self, ep_list: List[Dict[str, Any]], max_workers: int = 1, progress_cb=None) -> List[Dict[str, Any]]:
         """Fetch multiple episodes in parallel."""
         results: List[Dict[str, Any]] = [{} for _ in range(len(ep_list))]
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -309,23 +306,13 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                 print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
                 print(f"[api]   <- Response content: {r.text}")
             
-            # Handle rate limiting (429)
-            if r.status_code == 429:
+            # Handle rate limiting (429) and server errors (5xx)
+            if r.status_code == 429 or r.status_code >= 500:
                 if on_rate_limit:
                     on_rate_limit()
-                wait = max(5.0, backoff ** (attempt + 2)) + random.uniform(0.5, 1.5)
+                wait = max(1.0, backoff ** (attempt + 2)) + random.uniform(0.5, 1.5)
                 if const.HTTP_LOG:
-                    print(f"[api] !! Rate limit (429) hit. Waiting {wait:.1f}s...")
-                time.sleep(wait)
-                continue
-
-            # Handle too many requests or server errors (5xx)
-            if r.status_code >= 500:
-                if on_rate_limit:
-                    on_rate_limit()
-                wait = max(5.0, backoff ** (attempt + 2)) + random.uniform(0.5, 1.5)
-                if const.HTTP_LOG:
-                    print(f"[api] !! Server error ({r.status_code}). Retrying after backoff...")
+                    print(f"[api] !! Rate limit (429) or server error ({r.status_code}) hit. Waiting {wait:.1f}s...")
                 time.sleep(wait)
                 continue
 

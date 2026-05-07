@@ -1,6 +1,6 @@
 import json
 import os
-from typing import List
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from bs4 import BeautifulSoup
 from tqdm import tqdm
@@ -12,7 +12,167 @@ from src.novel import fetch_novel_and_episodes
 # Main Build Function
 # ----------------------------
 
-def build_epub(client, novel_id, out_dir, start_chapter=None, end_chapter=None, max_chapters=None, language="en", debug_dump=False):
+def _episode_no(ep: Dict) -> Optional[int]:
+    try:
+        return int(ep.get("episode_no"))
+    except Exception:
+        return None
+
+def _chapter_idx(ep: Dict, fallback: int) -> int:
+    try:
+        return int(ep.get("epi_num") or fallback)
+    except Exception:
+        return fallback
+
+def _chapter_title(ep: Dict) -> str:
+    return ep.get("epi_title") or f"Episode {ep.get('epi_num')}"
+
+def _cache_dir(book_dir: str) -> str:
+    return os.path.join(book_dir, ".cache/")
+
+def _cache_file_path(book_dir: str, epi_no: int) -> str:
+    return os.path.join(_cache_dir(book_dir), f"{epi_no}.json")
+
+def _failed_path(book_dir: str) -> str:
+    return os.path.join(book_dir, "failed_chapters.jsonl")
+
+def _load_jsonl(path: str) -> List[Dict]:
+    rows: List[Dict] = []
+    if not os.path.exists(path):
+        return rows
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    rows.append(row)
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+def _load_cache(book_dir: str) -> Dict[int, Dict]:
+    cache: Dict[int, Dict] = {}
+    cache_dir = _cache_dir(book_dir)
+    if os.path.isdir(cache_dir):
+        for name in os.listdir(cache_dir):
+            if not name.lower().endswith(".json"):
+                continue
+            path = os.path.join(cache_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    row = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(row, dict):
+                continue
+            try:
+                epi_no = int(row.get("epi_no"))
+            except Exception:
+                continue
+            html_text = row.get("html")
+            if isinstance(html_text, str) and html_text:
+                cache[epi_no] = row
+    return cache
+
+def _load_failed_episode_nos(book_dir: str) -> Set[int]:
+    failed: Set[int] = set()
+    for row in _load_jsonl(_failed_path(book_dir)):
+        epi_no = row.get("epi_no")
+        if isinstance(epi_no, int):
+            failed.add(epi_no)
+    return failed
+
+def _write_jsonl(path: str, rows: Iterable[Dict]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+def _write_cache_item(book_dir: str, row: Dict) -> None:
+    epi_no = int(row["epi_no"])
+    ensure_dir(_cache_dir(book_dir))
+    with open(_cache_file_path(book_dir, epi_no), "w", encoding="utf-8") as f:
+        json.dump(row, f, ensure_ascii=False, indent=2)
+
+def _fetch_with_cache(client, ep_list: List[Dict], book_dir: str, *,
+                      use_cache: bool = False, force_episode_nos: Optional[Set[int]] = None,
+                      max_workers: int = 1) -> Tuple[List[Dict], int]:
+    cache = _load_cache(book_dir) if use_cache else {}
+    force_episode_nos = force_episode_nos or set()
+    results: List[Dict] = [{} for _ in ep_list]
+    fetch_items: List[Dict] = []
+    fetch_positions: List[int] = []
+
+    for pos, ep in enumerate(ep_list):
+        epi_no = _episode_no(ep)
+        if epi_no is not None and epi_no in cache and epi_no not in force_episode_nos:
+            cached = dict(cache[epi_no])
+            cached["idx"] = pos + 1
+            results[pos] = cached
+            continue
+        fetch_items.append(ep)
+        fetch_positions.append(pos)
+
+    fetched_position_set = set(fetch_positions)
+
+    if fetch_items:
+        pbar = tqdm(total=len(fetch_items), desc="[info] fetching chapters", unit="chap")
+
+        def update_pbar():
+            pbar.update(1)
+
+        fetched = client.fetch_episodes_parallel(
+            fetch_items,
+            max_workers=max(1, int(max_workers or 1)),
+            progress_cb=update_pbar,
+        )
+        pbar.close()
+        for pos, res in zip(fetch_positions, fetched):
+            results[pos] = res
+    elif ep_list:
+        print("[info] all requested chapters loaded from cache")
+
+    failed_rows: List[Dict] = []
+    for pos, (ep, res) in enumerate(zip(ep_list, results), 1):
+        epi_no = _episode_no(ep)
+        title = _chapter_title(ep)
+        idx = _chapter_idx(ep, pos)
+        if not res or "error" in res:
+            failed_rows.append({
+                "idx": idx,
+                "epi_no": epi_no,
+                "title": title,
+                "url": f"https://global.novelpia.com/viewer/{epi_no}" if epi_no else "",
+                "error": (res or {}).get("error", "Unknown error"),
+            })
+            continue
+
+        if (pos - 1) not in fetched_position_set:
+            continue
+
+        cache_row = {
+            "idx": idx,
+            "epi_no": int(res.get("epi_no") or epi_no),
+            "epi_title": res.get("epi_title") or title,
+            "html": res.get("html") or "",
+        }
+        _write_cache_item(book_dir, cache_row)
+
+    if fetch_items:
+        if failed_rows:
+            _write_jsonl(_failed_path(book_dir), failed_rows)
+            print(f"[warn] Wrote failed chapter list: {_failed_path(book_dir)}")
+        else:
+            failed_file = _failed_path(book_dir)
+            if os.path.exists(failed_file):
+                os.remove(failed_file)
+
+    return results, len(fetch_items)
+
+def build_epub(client, novel_id, out_dir, start_chapter=None, end_chapter=None, max_chapters=None,
+               language="en", debug_dump=False, update=False, retry_failed=False, max_workers=1):
     data_novel, ep_list, title = fetch_novel_and_episodes(client, novel_id, start_chapter, end_chapter, max_chapters)
 
     builder = EpubBuilder(out_dir, debug_dump=debug_dump)
@@ -20,6 +180,20 @@ def build_epub(client, novel_id, out_dir, start_chapter=None, end_chapter=None, 
     base = kebab(title)
     book_dir = os.path.join(out_dir, base)
     ensure_dir(book_dir)
+    retry_nos = _load_failed_episode_nos(book_dir) if retry_failed else set()
+    if retry_failed and not retry_nos:
+        print("[info] no failed chapters to retry")
+    fetched_results, fetched_count = _fetch_with_cache(
+        client,
+        ep_list,
+        book_dir,
+        use_cache=(update or retry_failed),
+        force_episode_nos=retry_nos,
+        max_workers=max_workers,
+    )
+    if (update or retry_failed) and fetched_count == 0:
+        return None, title, 0
+
     build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)   
 
     return builder.build(
@@ -29,9 +203,12 @@ def build_epub(client, novel_id, out_dir, start_chapter=None, end_chapter=None, 
         filename_hint=title,
         language=language,
         novel_id=novel_id,
+        fetched_results=fetched_results,
+        max_workers=max_workers,
     )
 
-def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, max_chapters=None, language="en", debug_dump=False):
+def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, max_chapters=None,
+              language="en", debug_dump=False, update=False, retry_failed=False, max_workers=1):
     data_novel, ep_list, title = fetch_novel_and_episodes(client, novel_id, start_chapter, end_chapter, max_chapters)
 
     base = kebab(title)
@@ -39,13 +216,19 @@ def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, m
     ensure_dir(book_dir)
 
     total = 0
-    pbar = tqdm(total=len(ep_list), desc="Exporting TXT", unit="chap")
-
-    def update_pbar():
-        pbar.update(1)
-
-    fetched_results = client.fetch_episodes_parallel(ep_list, progress_cb=update_pbar)
-    pbar.close()
+    retry_nos = _load_failed_episode_nos(book_dir) if retry_failed else set()
+    if retry_failed and not retry_nos:
+        print("[info] no failed chapters to retry")
+    fetched_results, fetched_count = _fetch_with_cache(
+        client,
+        ep_list,
+        book_dir,
+        use_cache=(update or retry_failed),
+        force_episode_nos=retry_nos,
+        max_workers=max_workers,
+    )
+    if (update or retry_failed) and fetched_count == 0:
+        return None, title, 0
 
     for i, res in enumerate(fetched_results, 1):
         if not res or "error" in res:
@@ -78,7 +261,6 @@ def build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters=None):
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
     description = (nv.get("novel_story") or "").strip()
     
-    # tags can be in result.tag_list or novel.tag_list, accept str or dict with name fields
     tag_items = (data_novel.get("result", {}).get("tag_list")
                  or nv.get("tag_list")
                  or [])
@@ -90,7 +272,7 @@ def build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters=None):
             val = t.get("tag_name") or t.get("name") or t.get("title")
             if isinstance(val, str):
                 tags.append(val)
-    # unique while preserving order
+
     seen = set()
     uniq_tags = []
     for t in tags:
