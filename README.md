@@ -11,7 +11,7 @@ Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or mo
 * API-based fetch (no browser automation).
 * **Parallel Fetching**: Uses `ThreadPoolExecutor` for high-performance concurrent chapter downloads.
 * **Configurable Workers**: Tune chapter fetch concurrency with `-w`.
-* **Incremental Updates**: Reuse per-chapter JSON files in `.cache/ `-up` to fetch only missing/new chapters.
+* **Incremental Updates**: Reuse per-chapter JSON files in `.cache/` with `-up` to fetch only missing/new chapters.
 * **Failed Chapter Retry**: Writes `failed_chapters.jsonl` and can refetch those chapters with `-r`.
 * **Progress Reporting**: Real-time visual feedback with `tqdm` progress bars.
 * **Flexible Chapter Selection**: Support for downloading specific chapter ranges (`-start`/`-end`).
@@ -35,7 +35,7 @@ Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or mo
 ## Requirements
 
 * Python 3.9+
-* Packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`
+* Packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `fastapi`, `uvicorn`, `PySocks`
 
 Install packages:
 
@@ -47,7 +47,7 @@ pip install -r requirements.txt
 
 ## CLI
 
-```
+```text
 python main.py [NOVEL_ID ...] [-q FILE] [-u EMAIL] [-p PASSWORD]
                    [-out DIR | -o DIR] [-max N]
                    [-start START_CHAPTER] [-end END_CHAPTER]
@@ -65,10 +65,10 @@ Arguments
 * `-start` — start fetching from this chapter number.
 * `-end` — stop fetching at this chapter number.
 * `-lang` — EPUB language code (default `en`).
-* `-proxy` — HTTP/HTTPS proxy, e.g. `http://host:port`.
+* `-proxy` — HTTP/HTTPS/SOCKS proxy, e.g. `http://host:port` or `socks5h://host:port`.
 * `-t` — seconds to wait between episode requests (default `1.0`).
 * `-w` — parallel chapter fetch workers (default `1`). Increase to speed up fetching, but beware of hitting rate limits.
-* `-up` — reuse per-chapter JSON files in `.cache/` tofetch only chapters missing from cache.
+* `-up` — reuse per-chapter JSON files in `.cache/` to fetch only chapters missing from cache.
 * `-r` — retry chapters that failed to fetch.
 * `-v` — verbose request logs.
 * `-txt` — export as .txt per episode instead of EPUB.
@@ -83,25 +83,25 @@ Arguments
 python main.py 49 -u you@example.com -p "your-password"
 ```
 
-2) Subsequent runs can reuse stored tokens (no password on the command line):
+1) Subsequent runs can reuse stored tokens (no password on the command line):
 
 ```bash
 python main.py 49
 ```
 
-3) Update an ongoing novel later without redownloading cached chapters:
+1) Update an ongoing novel later without redownloading cached chapters:
 
 ```bash
 python main.py 49 -up
 ```
 
-4) Queue multiple novels with the same options:
+1) Queue multiple novels with the same options:
 
 ```bash
 python main.py 4565 1234 468 -up
 ```
 
-5) Keep an update queue in a text file:
+1) Keep an update queue in a text file:
 
 ```txt
 # novels.txt
@@ -117,20 +117,62 @@ python main.py -q novels.txt -up
 Queued runs print a final summary showing each novel ID, status, chapter count, and title or error.
 Duplicate novel IDs are skipped after positional IDs and queue files are merged.
 
-6) Retry only chapters that failed during a previous run:
+1) Retry only chapters that failed during a previous run:
 
 ```bash
 python main.py 49 -r
 ```
 
+### Web App
+
+Run a compact local dashboard from a browser:
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn web_app:app --reload
+```
+
+Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, and start a background EPUB job. The web UI is EPUB-only, polls progress, shows terminal-style logs, keeps recent jobs in the browser, and auto-downloads finished EPUB files once per job.
+
+Authentication is optional for public content. For ad-gated chapters, premium content, or chapter images, open **Authentication** and paste a full Netscape cookie export from your browser. Image hosts may require CloudFront cookies (`CloudFront-Key-Pair-Id`, `CloudFront-Policy`, `CloudFront-Signature`).
+
+To export browser cookies as Netscape `cookies.txt`, you can use [kairi003/Get-cookies.txt-LOCALLY](https://github.com/kairi003/Get-cookies.txt-Locally), an extension that exports cookies locally in Netscape format.
+
 ### Environment Variables (.env)
-You can create a `.env` file in the root directory to store your credentials securely:
+
+You can create a `.env` file in the root directory to store credentials or cookies:
 
 ```env
 NOVELPIA_EMAIL=your_email@example.com
 NOVELPIA_PASSWORD=your_password
+
+# Optional Netscape cookie auth
+NOVELPIA_COOKIE_FILE=cookies.txt
+NOVELPIA_COOKIE_TEXT_B64=
 ```
+
+`NOVELPIA_COOKIE_TEXT_B64` is recommended for multiline Netscape cookies. Encode a cookie file with PowerShell:
+
+```powershell
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-Content .\cookies.txt -Raw)))
+```
+
 A template is provided in `.env.example`.
+
+### Docker
+
+Build and run the production web server:
+
+```bash
+docker build -t pia-scrap .
+docker run --rm -p 8000:8000 -v ./output:/app/output pia-scrap
+```
+
+With environment variables:
+
+```bash
+docker run --rm -p 8000:8000 --env-file .env -v ./output:/app/output pia-scrap
+```
 
 ---
 
@@ -145,7 +187,7 @@ Alongside the EPUB, the tool writes:
 
 Output files are written under `output/<title>/`:
 
-```
+```text
 output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 ```
 
@@ -153,7 +195,7 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 
 ## Example Session
 
-```
+```text
 [auth] Logged in as: FoggyRam2237
 [info] extracting metadata…
 [info] title='The Reborn Calico Princess: Dancing with the System' author='Tata' chapter=2 status=Ongoing
@@ -168,8 +210,8 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 
 * **Auto-Recovery**: 401/expired tokens are now automatically handled if credentials are found in `.env` or provided via CLI.
 * **Smart Backoff**: 429/Rate limits trigger an automatic exponential backoff and dynamic throttle adjustment.
-* No-op updates — when `-up` finds every server chapter already cached, the existing EPUB/TXT files are left unchanged.
-* Missing images — some external hosts may block requests; those images will remain as external links.
+* No-op updates — when `-up` finds every server chapter already cached, existing EPUB/TXT outputs are left unchanged.
+* Missing images — paste full browser Netscape cookies if chapter images use `pv-gn.novelpia.com`; those URLs may require CloudFront cookies before images can be embedded.
 * HTTP debug — pass `-v` to print masked headers/params and short body previews.
 
 ---

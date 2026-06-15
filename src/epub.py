@@ -21,10 +21,27 @@ class EpubBuilder:
         self.debug_dump = debug_dump
         ensure_dir(out_dir)
 
+    def _fetch_headers(self, client: NovelpiaClient, url: str) -> Dict[str, str]:
+        headers = {
+            "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "referer": BASE_URL + "/",
+        }
+        cloudfront_parts = []
+        try:
+            for cookie in client.s.cookies:
+                cookie_name = cookie.name
+                if cookie_name.startswith("CloudFront-") or cookie_name in ("Key-Pair-Id", "Policy", "Signature"):
+                    cloudfront_parts.append(f"{cookie_name}={cookie.value}")
+        except Exception:
+            pass
+        if cloudfront_parts:
+            headers["Cookie"] = "; ".join(cloudfront_parts)
+        return headers
+
     def _fetch_bytes(self, client: NovelpiaClient, url: str) -> Optional[bytes]:
         for attempt in range(1, 4):
             try:
-                resp = client.s.get(url, timeout=client.timeout)
+                resp = client.s.get(url, headers=self._fetch_headers(client, url), timeout=client.timeout)
                 if resp.status_code == 429:
                     wait = 2.0 * attempt
                     time.sleep(wait)

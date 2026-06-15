@@ -3,6 +3,8 @@ import base64
 import json
 import os
 import re
+import tempfile
+from http.cookiejar import MozillaCookieJar
 
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -130,6 +132,35 @@ def j(x: Any) -> str:
     except Exception:
         return str(x)
     
+def load_netscape_cookies(path: str) -> MozillaCookieJar:
+    jar = MozillaCookieJar()
+    jar.load(path, ignore_discard=True, ignore_expires=True)
+    return jar
+
+def load_netscape_cookies_text(cookie_text: str) -> MozillaCookieJar:
+    jar = MozillaCookieJar()
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
+        tmp.write(cookie_text)
+        tmp_path = tmp.name
+    try:
+        jar.load(tmp_path, ignore_discard=True, ignore_expires=True)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return jar
+
+def get_cookie_value(cookie_jar, name: str) -> Optional[str]:
+    target = name.lower()
+    try:
+        for cookie in cookie_jar:
+            if cookie.name.lower() == target:
+                return cookie.value
+    except Exception as e:
+        print(f"Error occurred while reading cookies: {e}")
+    return None
+
 def attach_auth_cookies(session, headers=None):
         ck = getattr(session, "cookies", None)
         if ck is None:

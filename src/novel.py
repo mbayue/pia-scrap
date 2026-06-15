@@ -54,7 +54,7 @@ def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=N
     
     print(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")
 
-    rows = int(epi_cnt) if epi_cnt else 1000
+    rows = max(2, int(epi_cnt)) if epi_cnt else 1000
     data_list = client.episode_list(novel_id, rows=rows)
     ep_list = data_list["result"].get("list", [])
 

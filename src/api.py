@@ -277,7 +277,7 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
             # Inject Cookie header (except for login endpoint) using session cookies
             try:
                 if "/v1/member/login" not in url:
-                    attach_auth_cookies(session, headers)
+                    headers = attach_auth_cookies(session, headers)
             except Exception as e:
                 print(f"Error occurred while attaching auth cookies: {e}")
                 pass
