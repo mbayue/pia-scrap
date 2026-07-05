@@ -239,7 +239,7 @@ def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, m
         html_text = res["html"]
         epi_title = res["epi_title"]
 
-        soup = BeautifulSoup(html_text, "html.parser")
+        soup = BeautifulSoup(html_text, "lxml")
         text = soup.get_text("\n")
 
         fname = f"{i}_{sanitize_filename(epi_title)}.txt"

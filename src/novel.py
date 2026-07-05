@@ -6,7 +6,7 @@ from src.helper import normalize_url
 # ----------------------------
 
 def html_from_episode_text(raw_html: str) -> str:
-    soup = BeautifulSoup(raw_html or "", "html.parser")
+    soup = BeautifulSoup(raw_html or "", "lxml")
 
     # normalize images
     for img in soup.find_all("img"):
@@ -17,7 +17,7 @@ def html_from_episode_text(raw_html: str) -> str:
         if img.get("src"):
             img["src"] = normalize_url(img["src"])
 
-    # Ensure document wrapper
+    # Ensure document wrapper with meta charset="utf-8"
     if not soup.find("html"):
         html_tag = soup.new_tag("html")
         head = soup.new_tag("head")
@@ -29,6 +29,18 @@ def html_from_episode_text(raw_html: str) -> str:
         html_tag.append(head)
         html_tag.append(body)
         soup.append(html_tag)
+    else:
+        # With lxml, soup often gets auto-wrapped in <html><body>
+        # We need to ensure the head and meta tag are present to avoid regressions.
+        head = soup.find("head")
+        if not head:
+            head = soup.new_tag("head")
+            soup.html.insert(0, head)
+
+        meta = head.find("meta", charset="utf-8")
+        if not meta:
+            meta = soup.new_tag("meta", charset="utf-8")
+            head.append(meta)
 
     return str(soup)
 

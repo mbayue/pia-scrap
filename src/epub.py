@@ -100,7 +100,7 @@ class EpubBuilder:
 
         def add_images_and_rewrite(html_str: str) -> Tuple[str, List[epub.EpubItem]]:
             nonlocal img_index
-            soup = BeautifulSoup(html_str, "html.parser")
+            soup = BeautifulSoup(html_str, "lxml")
             added_items: List[epub.EpubItem] = []
 
             for img in soup.find_all("img"):
