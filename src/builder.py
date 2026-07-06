@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from src.contracts import ChapterResult, EpisodeItem, FailedChapter, NovelResponse
 from src.epub import EpubBuilder
 from src.helper import ensure_dir, kebab, sanitize_filename
 from src.novel import fetch_novel_and_episodes
@@ -13,19 +14,22 @@ from src.novel import fetch_novel_and_episodes
 # Main Build Function
 # ----------------------------
 
-def _episode_no(ep: dict) -> int | None:
+def _episode_no(ep: EpisodeItem) -> int | None:
+    episode_no = ep.get("episode_no")
+    if episode_no is None:
+        return None
     try:
-        return int(ep.get("episode_no"))
+        return int(episode_no)
     except Exception:
         return None
 
-def _chapter_idx(ep: dict, fallback: int) -> int:
+def _chapter_idx(ep: EpisodeItem, fallback: int) -> int:
     try:
         return int(ep.get("epi_num") or fallback)
     except Exception:
         return fallback
 
-def _chapter_title(ep: dict) -> str:
+def _chapter_title(ep: EpisodeItem) -> str:
     return ep.get("epi_title") or f"Episode {ep.get('epi_num')}"
 
 def _cache_dir(book_dir: str) -> str:
@@ -37,8 +41,8 @@ def _cache_file_path(book_dir: str, epi_no: int) -> str:
 def _failed_path(book_dir: str) -> str:
     return os.path.join(book_dir, "failed_chapters.jsonl")
 
-def _load_jsonl(path: str) -> list[dict]:
-    rows: list[dict] = []
+def _load_jsonl(path: str) -> list[FailedChapter]:
+    rows: list[FailedChapter] = []
     if not os.path.exists(path):
         return rows
     with open(path, encoding="utf-8") as f:
@@ -49,13 +53,19 @@ def _load_jsonl(path: str) -> list[dict]:
             try:
                 row = json.loads(line)
                 if isinstance(row, dict):
-                    rows.append(row)
+                    rows.append({
+                        "idx": int(row.get("idx") or 0),
+                        "epi_no": int(row["epi_no"]) if row.get("epi_no") is not None else None,
+                        "title": str(row.get("title") or ""),
+                        "url": str(row.get("url") or ""),
+                        "error": str(row.get("error") or ""),
+                    })
             except json.JSONDecodeError:
                 continue
     return rows
 
-def _load_cache(book_dir: str) -> dict[int, dict]:
-    cache: dict[int, dict] = {}
+def _load_cache(book_dir: str) -> dict[int, ChapterResult]:
+    cache: dict[int, ChapterResult] = {}
     cache_dir = _cache_dir(book_dir)
     if os.path.isdir(cache_dir):
         for name in os.listdir(cache_dir):
@@ -70,14 +80,22 @@ def _load_cache(book_dir: str) -> dict[int, dict]:
                 continue
             if not isinstance(row, dict):
                 continue
+            raw_epi_no = row.get("epi_no")
+            if raw_epi_no is None:
+                continue
             try:
-                epi_no = int(row.get("epi_no"))
+                epi_no = int(raw_epi_no)
             except Exception as e:
                 print(f"[warn] Ignoring cache row with invalid epi_no in {path}: {e}")
                 continue
             html_text = row.get("html")
             if isinstance(html_text, str) and html_text:
-                cache[epi_no] = row
+                cache[epi_no] = {
+                    "idx": int(row.get("idx") or 0),
+                    "epi_no": epi_no,
+                    "epi_title": str(row.get("epi_title") or ""),
+                    "html": html_text,
+                }
     return cache
 
 def _load_failed_episode_nos(book_dir: str) -> set[int]:
@@ -88,31 +106,33 @@ def _load_failed_episode_nos(book_dir: str) -> set[int]:
             failed.add(epi_no)
     return failed
 
-def _write_jsonl(path: str, rows: Iterable[dict]) -> None:
+def _write_jsonl(path: str, rows: Iterable[FailedChapter]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-def _write_cache_item(book_dir: str, row: dict) -> None:
-    epi_no = int(row["epi_no"])
+def _write_cache_item(book_dir: str, row: ChapterResult) -> None:
+    row_epi_no = row.get("epi_no")
+    if row_epi_no is None:
+        raise ValueError("cache row missing epi_no")
+    epi_no = int(row_epi_no)
     ensure_dir(_cache_dir(book_dir))
     with open(_cache_file_path(book_dir, epi_no), "w", encoding="utf-8") as f:
         json.dump(row, f, ensure_ascii=False, indent=2)
 
-def _fetch_with_cache(client, ep_list: list[dict], book_dir: str, *,
+def _fetch_with_cache(client, ep_list: list[EpisodeItem], book_dir: str, *,
                       use_cache: bool = False, force_episode_nos: set[int] | None = None,
-                      max_workers: int = 1) -> tuple[list[dict], int]:
+                      max_workers: int = 1) -> tuple[list[ChapterResult], int]:
     cache = _load_cache(book_dir) if use_cache else {}
     force_episode_nos = force_episode_nos or set()
-    results: list[dict] = [{} for _ in ep_list]
-    fetch_items: list[dict] = []
+    results: list[ChapterResult] = [{} for _ in ep_list]
+    fetch_items: list[EpisodeItem] = []
     fetch_positions: list[int] = []
 
     for pos, ep in enumerate(ep_list):
         epi_no = _episode_no(ep)
         if epi_no is not None and epi_no in cache and epi_no not in force_episode_nos:
-            cached = dict(cache[epi_no])
-            cached["idx"] = pos + 1
+            cached: ChapterResult = {**cache[epi_no], "idx": pos + 1}
             results[pos] = cached
             continue
         fetch_items.append(ep)
@@ -137,7 +157,7 @@ def _fetch_with_cache(client, ep_list: list[dict], book_dir: str, *,
     elif ep_list:
         print("[info] all requested chapters loaded from cache")
 
-    failed_rows: list[dict] = []
+    failed_rows: list[FailedChapter] = []
     for pos, (ep, res) in enumerate(zip(ep_list, results, strict=False), 1):
         epi_no = _episode_no(ep)
         title = _chapter_title(ep)
@@ -155,9 +175,12 @@ def _fetch_with_cache(client, ep_list: list[dict], book_dir: str, *,
         if (pos - 1) not in fetched_position_set:
             continue
 
-        cache_row = {
+        cache_epi_no = res.get("epi_no") or epi_no
+        if cache_epi_no is None:
+            continue
+        cache_row: ChapterResult = {
             "idx": idx,
-            "epi_no": int(res.get("epi_no") or epi_no),
+            "epi_no": int(cache_epi_no),
             "epi_title": res.get("epi_title") or title,
             "html": res.get("html") or "",
         }
@@ -239,8 +262,8 @@ def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, m
             print(f"[warn] Failed to fetch chapter {i}: {err}")
             continue
 
-        html_text = res["html"]
-        epi_title = res["epi_title"]
+        html_text = res.get("html") or ""
+        epi_title = res.get("epi_title") or f"Episode {i}"
 
         soup = BeautifulSoup(html_text, "lxml")
         text = soup.get_text("\n")
@@ -255,16 +278,17 @@ def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, m
 
     return book_dir, title, total
 
-def build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters=None):
-    nv = data_novel["result"]["novel"]
+def build_metadata(book_dir, data_novel: NovelResponse, novel_id, ep_list: list[EpisodeItem], max_chapters=None):
+    result = data_novel["result"]
+    nv = result["novel"]
     title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
-    epi_cnt = data_novel["result"].get("info", {}).get("epi_cnt") or nv.get("count_epi") or 0
-    writers = data_novel["result"].get("writer_list") or []
+    epi_cnt = result.get("info", {}).get("epi_cnt") or nv.get("count_epi") or 0
+    writers = result.get("writer_list") or []
     author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
     description = (nv.get("novel_story") or "").strip()
 
-    tag_items = (data_novel.get("result", {}).get("tag_list")
+    tag_items = (result.get("tag_list")
                  or nv.get("tag_list")
                  or [])
     tags: list[str] = []
@@ -300,7 +324,9 @@ def build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters=None):
     chapters_path = os.path.join(book_dir, "chapters.jsonl")
     with open(chapters_path, "w", encoding="utf-8") as f:
         for idx, ep in enumerate(ep_list, 1):
-            epi_no = int(ep.get("episode_no"))
+            epi_no = _episode_no(ep)
+            if epi_no is None:
+                continue
             epi_title = ep.get("epi_title") or f"Episode {ep.get('epi_num')}"
             rec = {"idx": idx, "title": epi_title, "url": f"https://global.novelpia.com/viewer/{epi_no}"}
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

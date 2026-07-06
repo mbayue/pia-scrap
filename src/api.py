@@ -11,6 +11,7 @@ from typing import Any
 import requests
 
 from src import const
+from src.contracts import ChapterResult, EpisodeContentResponse, EpisodeItem, EpisodeListResponse, NovelResponse
 from src.helper import attach_auth_cookies, extract_t_token, j, mask_kv, merge_login_at
 from src.novel import html_from_episode_text
 
@@ -103,7 +104,7 @@ class NovelpiaClient:
             pass
         return self.tokens.login_at
 
-    def me(self) -> dict:
+    def me(self) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/login/me"
         r = request_with_retries(
             self.s, "GET", url,
@@ -114,7 +115,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def novel(self, novel_id: int) -> dict:
+    def novel(self, novel_id: int) -> NovelResponse:
         url = f"{const.API_BASE}/v1/novel"
         r = request_with_retries(
             self.s, "GET", url,
@@ -126,7 +127,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def episode_list(self, novel_id: int, rows: int) -> dict:
+    def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse:
         url = f"{const.API_BASE}/v1/novel/episode/list"
         r = request_with_retries(
             self.s, "GET", url,
@@ -138,7 +139,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def episode_ticket(self, episode_no: int) -> dict:
+    def episode_ticket(self, episode_no: int) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/novel/episode"
         headers = merge_login_at({}, self.tokens.login_at)
         params = {"episode_no": episode_no}
@@ -155,7 +156,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def episode_content(self, token_t: str) -> dict:
+    def episode_content(self, token_t: str) -> EpisodeContentResponse:
         url = f"{const.API_BASE}/v1/novel/episode/content"
         r = request_with_retries(
             self.s, "GET", url,
@@ -166,7 +167,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def fetch_episode(self, ep: dict, idx: int = 0) -> dict:
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
         """Fetch ticket and content for a single episode."""
         episode_no = ep.get("episode_no")
         if episode_no is None:
@@ -245,10 +246,10 @@ class NovelpiaClient:
         }
 
     def fetch_episodes_parallel(
-        self, ep_list: list[dict[str, Any]], max_workers: int = 1, progress_cb=None
-    ) -> list[dict[str, Any]]:
+        self, ep_list: list[EpisodeItem], max_workers: int = 1, progress_cb=None
+    ) -> list[ChapterResult]:
         """Fetch multiple episodes in parallel."""
-        results: list[dict[str, Any]] = [{} for _ in range(len(ep_list))]
+        results: list[ChapterResult] = [{} for _ in range(len(ep_list))]
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_idx = {
                 executor.submit(self.fetch_episode, ep, i+1): i
@@ -391,4 +392,4 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
             raise
     if last_exc:
         raise last_exc
-    return r
+    raise RuntimeError("request attempts exhausted")

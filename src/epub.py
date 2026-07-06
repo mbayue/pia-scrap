@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 from src.api import NovelpiaClient
 from src.const import BASE_URL
+from src.contracts import ChapterResult, EpisodeItem, NovelResponse
 from src.helper import ensure_dir, kebab, media_type_from_ext, normalize_url
 
 # ----------------------------
@@ -57,15 +58,16 @@ class EpubBuilder:
                 continue
         return None
 
-    def build(self, client: NovelpiaClient, novel: dict, episodes: list[dict],
+    def build(self, client: NovelpiaClient, novel: NovelResponse, episodes: list[EpisodeItem],
               filename_hint: str | None = None, language: str = "en",
               author_fallback: str = "Unknown", css_text: str | None = None,
-              novel_id: int | None = None, fetched_results: list[dict] | None = None,
+              novel_id: int | None = None, fetched_results: list[ChapterResult] | None = None,
               max_workers: int = 1) -> tuple[str, str, int]:
-        nv = novel["result"]["novel"]
+        result = novel["result"]
+        nv = result["novel"]
         title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
-        writers = novel["result"].get("writer_list") or []
-        author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else author_fallback)
+        writers = result.get("writer_list") or []
+        author = (writers[0].get("writer_name") if writers else None) or author_fallback
         status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
         description = (nv.get("novel_story") or "").strip()
 
@@ -96,8 +98,8 @@ class EpubBuilder:
                               media_type="text/css", content=default_css.encode("utf-8"))
         book.add_item(style)
 
-        spine: list = ["nav"]
-        toc: list = []
+        spine: list[str | epub.EpubHtml] = ["nav"]
+        toc: list[epub.EpubHtml] = []
         image_cache: dict[str, str] = {}
         img_index = 1
 
@@ -155,8 +157,8 @@ class EpubBuilder:
                 print(f"[warn] Failed to fetch chapter {i}: {err}")
                 continue
 
-            html_text = res["html"]
-            epi_title = res["epi_title"]
+            html_text = res.get("html") or ""
+            epi_title = res.get("epi_title") or f"Episode {i}"
 
             html_text, new_imgs = add_images_and_rewrite(html_text)
 

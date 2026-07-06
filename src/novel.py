@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup
 
+from src.contracts import EpisodeItem, NovelResponse
 from src.helper import normalize_url
 
 # ----------------------------
@@ -36,7 +37,9 @@ def html_from_episode_text(raw_html: str) -> str:
         head = soup.find("head")
         if not head:
             head = soup.new_tag("head")
-            soup.html.insert(0, head)
+            html_tag = soup.html
+            if html_tag is not None:
+                html_tag.insert(0, head)
 
         meta = head.find("meta", charset="utf-8")
         if not meta:
@@ -45,7 +48,9 @@ def html_from_episode_text(raw_html: str) -> str:
 
     return str(soup)
 
-def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None):
+def fetch_novel_and_episodes(
+    client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None
+) -> tuple[NovelResponse, list[EpisodeItem], str]:
     # Auth check
     try:
         res = client.me()
