@@ -134,6 +134,8 @@ python -m uvicorn web_app:app --reload
 
 Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, and start a background EPUB job. The web UI is EPUB-only, polls progress, shows terminal-style logs, keeps recent jobs in the browser, and auto-downloads finished EPUB files once per job.
 
+The dashboard is designed for local use on `127.0.0.1`. It accepts credentials and full cookie exports, so do not expose it directly on a public interface. If you deploy it beyond localhost, put it behind your own HTTPS/auth reverse proxy and treat `.env`, `.api.json`, and cookie text as secrets.
+
 Authentication is optional for public content. For ad-gated chapters, premium content, or chapter images, open **Authentication** and paste a full Netscape cookie export from your browser. Image hosts may require CloudFront cookies (`CloudFront-Key-Pair-Id`, `CloudFront-Policy`, `CloudFront-Signature`).
 
 To export browser cookies as Netscape `cookies.txt`, you can use [kairi003/Get-cookies.txt-LOCALLY](https://github.com/kairi003/Get-cookies.txt-Locally), an extension that exports cookies locally in Netscape format.
@@ -166,6 +168,12 @@ Build and run the production web server:
 ```bash
 docker build -t pia-scrap .
 docker run --rm -p 8000:8000 -v ./output:/app/output pia-scrap
+```
+
+Bind Docker to localhost unless you have added external auth:
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 -v ./output:/app/output pia-scrap
 ```
 
 With environment variables:
