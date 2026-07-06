@@ -16,6 +16,8 @@ from src.runner import QueueOptions, parse_queue_lines, run_queue
 app = FastAPI(title="PIA Scrap")
 jobs: Dict[str, Dict] = {}
 jobs_lock = threading.Lock()
+MAX_STORED_JOBS = 50
+ACTIVE_JOB_STATUSES = {"queued", "running"}
 
 
 class JobRequest(BaseModel):
@@ -49,6 +51,18 @@ def _replace_or_append_log(job_id: str, message: str) -> None:
             logs[-1] = message
         else:
             logs.append(message)
+
+def _prune_finished_jobs_locked() -> None:
+    overflow = len(jobs) - MAX_STORED_JOBS
+    if overflow <= 0:
+        return
+    finished_ids = [
+        job_id
+        for job_id, job in sorted(jobs.items(), key=lambda item: item[1].get("created_at", ""))
+        if job.get("status") not in ACTIVE_JOB_STATUSES
+    ]
+    for job_id in finished_ids[:overflow]:
+        jobs.pop(job_id, None)
 
 class _JobProgress:
     def __init__(self, job_id: str, total: int = 0, desc: str = "", unit: str = "", **_kwargs):
@@ -147,6 +161,7 @@ def create_job(request: JobRequest):
             "skipped_ids": [],
             "error": None,
         }
+        _prune_finished_jobs_locked()
 
     thread = threading.Thread(target=_run_job, args=(job_id, novel_ids, options), daemon=True)
     thread.start()
