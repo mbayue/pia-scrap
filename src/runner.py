@@ -188,55 +188,58 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
     total = len(novel_ids)
     max_chapters = options.max_chapters if options.max_chapters and options.max_chapters > 0 else None
 
-    for idx, novel_id in enumerate(novel_ids, 1):
-        if total > 1:
-            log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
+    try:
+        for idx, novel_id in enumerate(novel_ids, 1):
+            if total > 1:
+                log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
 
-        try:
-            if options.txt:
-                out_dir_final, title, count = build_txt(
-                    client,
-                    novel_id,
-                    options.out,
-                    start_chapter=options.start_chapter,
-                    end_chapter=options.end_chapter,
-                    max_chapters=max_chapters,
-                    language=options.lang,
-                    debug_dump=options.debug,
-                    update=options.update,
-                    retry_failed=options.retry_failed,
-                    max_workers=options.workers,
-                )
-                if out_dir_final is None:
-                    log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
-                    summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
+            try:
+                if options.txt:
+                    out_dir_final, title, count = build_txt(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                    )
+                    if out_dir_final is None:
+                        log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
+                        summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
+                    else:
+                        log(f"[success] Wrote TXT files under: {out_dir_final}")
+                        summary_rows.append({"novel_id": novel_id, "status": "txt", "chapters": count, "title": title, "path": out_dir_final})
                 else:
-                    log(f"[success] Wrote TXT files under: {out_dir_final}")
-                    summary_rows.append({"novel_id": novel_id, "status": "txt", "chapters": count, "title": title, "path": out_dir_final})
-            else:
-                out_file, title, count = build_epub(
-                    client,
-                    novel_id,
-                    options.out,
-                    start_chapter=options.start_chapter,
-                    end_chapter=options.end_chapter,
-                    max_chapters=max_chapters,
-                    language=options.lang,
-                    debug_dump=options.debug,
-                    update=options.update,
-                    retry_failed=options.retry_failed,
-                    max_workers=options.workers,
-                )
-                if out_file is None:
-                    log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
-                    summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
-                else:
-                    log(f"[success] Wrote EPUB: {out_file}")
-                    summary_rows.append({"novel_id": novel_id, "status": "epub", "chapters": count, "title": title, "path": out_file})
-        except Exception as e:
-            failures.append((novel_id, str(e)))
-            summary_rows.append({"novel_id": novel_id, "status": "failed", "chapters": None, "title": str(e), "path": None})
-            log(f"[error] Failed to build novel {novel_id}: {e}")
+                    out_file, title, count = build_epub(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                    )
+                    if out_file is None:
+                        log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
+                        summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
+                    else:
+                        log(f"[success] Wrote EPUB: {out_file}")
+                        summary_rows.append({"novel_id": novel_id, "status": "epub", "chapters": count, "title": title, "path": out_file})
+            except Exception as e:
+                failures.append((novel_id, str(e)))
+                summary_rows.append({"novel_id": novel_id, "status": "failed", "chapters": None, "title": str(e), "path": None})
+                log(f"[error] Failed to build novel {novel_id}: {e}")
+    finally:
+        client.close()
 
     return {"rows": summary_rows, "failures": failures, "skipped_ids": skipped_ids}
 

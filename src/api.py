@@ -52,6 +52,9 @@ class NovelpiaClient:
         except Exception as e:
             print(f"Error setting cookies: {e}")
 
+    def close(self):
+        self.s.close()
+
     def login(self):
         url = f"{const.API_BASE}/v1/member/login"
         r = request_with_retries(

@@ -1,6 +1,7 @@
 import requests
 
 from src.api import request_with_retries
+from src.api import NovelpiaClient
 
 
 class FakeResponse:
@@ -69,3 +70,13 @@ def test_request_with_retries_does_not_retry_401_before_auth_recovery(monkeypatc
 
     assert session.calls == 1
     assert response.status_code == 401
+
+
+def test_novelpia_client_close_closes_session(monkeypatch):
+    closed = []
+    client = NovelpiaClient()
+    monkeypatch.setattr(client.s, "close", lambda: closed.append(True))
+
+    client.close()
+
+    assert closed == [True]
