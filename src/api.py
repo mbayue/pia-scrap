@@ -290,7 +290,7 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
 
             r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
         
-            if r.status_code != 200:
+            if r.status_code == 500:
                 if const.HTTP_LOG:
                     print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
                     try:
