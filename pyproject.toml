@@ -22,15 +22,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "beautifulsoup4>=4.12",
-    "ebooklib>=0.18",
-    "requests>=2.32",
-    "tqdm>=4.66",
-    "python-dotenv>=1.0",
-    "fastapi>=0.115",
-    "uvicorn>=0.34",
-    "PySocks>=1.7",
-    "lxml>=5.2",
+    "beautifulsoup4==4.12.*",
+    "ebooklib==0.18",
+    "requests==2.32.*",
+    "tqdm==4.66.*",
+    "python-dotenv==1.0.*",
+    "fastapi==0.115.*",
+    "uvicorn==0.34.*",
+    "PySocks==1.7.*",
+    "lxml==5.2.*",
 ]
 
 [project.optional-dependencies]
