@@ -24,7 +24,7 @@ class QueueOptions:
     lang: str = "en"
     proxy: Optional[str] = None
     debug: bool = False
-    throttle: float = 1.0
+    throttle: float = 1.25
     workers: int = 1
     update: bool = False
     retry_failed: bool = False

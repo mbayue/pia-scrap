@@ -16,7 +16,7 @@ Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or mo
 * **Progress Reporting**: Real-time visual feedback with `tqdm` progress bars.
 * **Flexible Chapter Selection**: Support for downloading specific chapter ranges (`-start`/`-end`).
 * **Environment Variable Support**: Securely store credentials in a `.env` file via `python-dotenv`.
-* **Advanced Automation**: Automatically handles rate limits (429) with smart backoff and session expiration (401) with auto re-login.
+* **Advanced Automation**: Automatically handles server-side rate-limit responses with retry and session expiration (401) with auto re-login.
 * Proper EPUB with cover, About page, per‑chapter files, ToC, NCX/Nav.
 * Preserves inline images (downloaded and embedded).
 
@@ -209,7 +209,7 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 ## Tips & Troubleshooting
 
 * **Auto-Recovery**: 401/expired tokens are now automatically handled if credentials are found in `.env` or provided via CLI.
-* **Smart Backoff**: 429/Rate limits trigger an automatic exponential backoff and dynamic throttle adjustment.
+* **Retry Handling**: Rate-limit and server-error responses trigger a fixed retry delay and dynamic throttle adjustment.
 * No-op updates — when `-up` finds every server chapter already cached, existing EPUB/TXT outputs are left unchanged.
 * Missing images — paste full browser Netscape cookies if chapter images use `pv-gn.novelpia.com`; those URLs may require CloudFront cookies before images can be embedded.
 * HTTP debug — pass `-v` to print masked headers/params and short body previews.

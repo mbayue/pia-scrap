@@ -24,9 +24,13 @@ class Tokens:
     tkey: Optional[str] = None
     userkey: Optional[str] = None
 
+
+RETRY_WAIT_SECONDS = 1.0
+
+
 class NovelpiaClient:
     def __init__(self, email: Optional[str] = None, password: Optional[str] = None,
-                 proxy: Optional[str] = None, timeout: int = 30, throttle: float = 1.0,
+                 proxy: Optional[str] = None, timeout: int = 30, throttle: float = 1.25,
                  userkey: Optional[str] = None, tkey: Optional[str] = None):
         self.s = requests.Session()
         self.s.headers.update(const.SESSION_HEADERS.copy())
@@ -36,7 +40,6 @@ class NovelpiaClient:
         self.tokens = Tokens()
         self.email = email
         self.password = password
-        # delay seconds between episode-related API calls to reduce 429/500 rate limits
         self.throttle = throttle
         try:
             if not userkey:
@@ -54,7 +57,7 @@ class NovelpiaClient:
         r = request_with_retries(
             self.s, "POST", url,
             json={"email": self.email, "passwd": self.password},
-            timeout=self.timeout, max_retries=2,
+            timeout=self.timeout, max_retries=3,
         )
         r.raise_for_status()
         data = r.json()
@@ -74,7 +77,7 @@ class NovelpiaClient:
         r = request_with_retries(
             self.s, "GET", url,
             headers=merge_login_at({}, self.tokens.login_at),
-            timeout=self.timeout, max_retries=2,
+            timeout=self.timeout, max_retries=3,
         )
         r.raise_for_status()
         self.tokens.login_at = r.json()["result"]["LOGINAT"]
@@ -97,21 +100,13 @@ class NovelpiaClient:
             pass
         return self.tokens.login_at
 
-    def _on_rate_limit(self):
-        """Increase throttle when rate limit is hit"""
-        old = self.throttle
-        self.throttle = min(5.0, self.throttle * 1.5)
-        if const.HTTP_LOG:
-            print(f"[api] Increased throttle from {old}s to {self.throttle}s due to rate limit.")
-
     def me(self) -> Dict:
         url = f"{const.API_BASE}/v1/login/me"
         r = request_with_retries(
             self.s, "GET", url,
             headers=merge_login_at({}, self.tokens.login_at),
             timeout=self.timeout, allow_refresh=True, 
-            refresh_fn=self.refresh, login_fn=self.login,
-            on_rate_limit=self._on_rate_limit
+            refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
@@ -123,8 +118,7 @@ class NovelpiaClient:
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id},
             timeout=self.timeout, allow_refresh=True, 
-            refresh_fn=self.refresh, login_fn=self.login,
-            on_rate_limit=self._on_rate_limit
+            refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
@@ -136,8 +130,7 @@ class NovelpiaClient:
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id, "rows": rows, "sort": "ASC"},
             timeout=self.timeout, allow_refresh=True, 
-            refresh_fn=self.refresh, login_fn=self.login,
-            on_rate_limit=self._on_rate_limit
+            refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
@@ -154,7 +147,7 @@ class NovelpiaClient:
             headers=headers, params=params,
             timeout=self.timeout, allow_refresh=True, 
             refresh_fn=self.refresh, login_fn=self.login,
-            on_rate_limit=self._on_rate_limit, max_retries=4,
+            max_retries=3,
         )
         r.raise_for_status()
         return r.json()
@@ -165,8 +158,7 @@ class NovelpiaClient:
             self.s, "GET", url,
             params={"_t": token_t},
             timeout=self.timeout, max_retries=3,
-            allow_refresh=True, refresh_fn=self.refresh, login_fn=self.login,
-            on_rate_limit=self._on_rate_limit
+            allow_refresh=True, refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
@@ -260,13 +252,9 @@ class NovelpiaClient:
 
 def request_with_retries(session: requests.Session, method: str, url: str, *,
                           headers=None, params=None, json=None, data=None,
-                          timeout=30, max_retries=3, backoff=1.25,
+                          timeout=30, max_retries=3,
                           allow_refresh=False, refresh_fn=None,
-                          login_fn=None, on_rate_limit=None):
-    """Generic request wrapper: retries on 5xx, 429, and network issues.
-    If allow_refresh is True and the response indicates an expired token, invoke
-    refresh_fn() followed by login_fn() if needed, then retry.
-    """
+                          login_fn=None):
     attempt = 0
     last_exc = None
     did_refresh = False
@@ -301,19 +289,27 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                     print(f"[api]   json:    {j(mask_kv(json))}")
 
             r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
-
-            if const.HTTP_LOG and r.status_code != 200:
-                print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
-                print(f"[api]   <- Response content: {r.text}")
-            
-            # Handle rate limiting (429) and server errors (5xx)
-            if r.status_code == 429 or r.status_code >= 500:
-                if on_rate_limit:
-                    on_rate_limit()
-                wait = max(1.0, backoff ** (attempt + 2)) + random.uniform(0.5, 1.5)
+        
+            if r.status_code != 200:
                 if const.HTTP_LOG:
-                    print(f"[api] !! Rate limit (429) or server error ({r.status_code}) hit. Waiting {wait:.1f}s...")
-                time.sleep(wait)
+                    print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
+                    try:
+                        print(f"[api]   <- Response content: {j(mask_kv(r.json()))}")
+                    except Exception:
+                        print(f"[api]   <- Response content: {r.text}")
+
+                api_message = ""
+                try:
+                    body = r.json()
+                    api_message = body.get("errmsg") or body.get("message") or ""
+                except Exception:
+                    pass
+                if attempt >= max_retries:
+                    detail = api_message or "Server error"
+                    raise requests.HTTPError(detail, response=r)
+                detail = api_message or "Server error"
+                print(f"[warn] {detail} retrying in {RETRY_WAIT_SECONDS:.0f}s ({attempt}/{max_retries})")
+                time.sleep(RETRY_WAIT_SECONDS)
                 continue
 
             # Handle auth refresh-and-retry for all endpoints except login/refresh
@@ -360,16 +356,13 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                     except Exception as e:
                         if const.HTTP_LOG: print(f"[api] Auth recovery failed: {e}")
 
-            if r.json and r.status_code >= 500 and attempt < max_retries:
-                time.sleep(backoff ** attempt)
-                continue
             return r
         except requests.RequestException as e:
             if const.HTTP_LOG:
                 print(f"[api] !! {method} {url} failed on attempt {attempt}: {e}")
             last_exc = e
             if attempt < max_retries:
-                time.sleep(backoff ** attempt)
+                time.sleep(RETRY_WAIT_SECONDS)
                 continue
             raise
     if last_exc:

@@ -92,10 +92,21 @@ def merge_login_at(headers: dict, login_at: Optional[str]) -> dict:
         h["login-at"] = login_at
     return h
 
+SENSITIVE_KEY_PARTS = (
+    "pass", "passwd", "password", "authorization", "token",
+    "login-at", "login_at", "loginat", "_t", "cookie", "set-cookie",
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    lowered = str(key).lower()
+    return any(part in lowered for part in SENSITIVE_KEY_PARTS)
+
+
 def _mask_value(v: Any) -> Any:
     try:
         if isinstance(v, dict):
-            return {k: _mask_value(v2) for k, v2 in v.items()}
+            return {k: "***" if _is_sensitive_key(k) else _mask_value(v2) for k, v2 in v.items()}
         if isinstance(v, list):
             return [_mask_value(x) for x in v]
         if isinstance(v, str):
@@ -116,11 +127,7 @@ def mask_kv(d: Optional[dict]) -> Optional[dict]:
         return d
     out = {}
     for k, v in d.items():
-        kl = str(k).lower()
-        if any(x in kl for x in (
-            "pass", "passwd", "password", "authorization", "token",
-            "login-at", "login_at", "_t", "cookie", "set-cookie"
-        )):
+        if _is_sensitive_key(k):
             out[k] = "***"
         else:
             out[k] = _mask_value(v)

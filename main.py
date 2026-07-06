@@ -17,7 +17,7 @@ def main():
     ap.add_argument("-lang", default="en", help="EPUB language code (default: en)")
     ap.add_argument("-proxy", default=None, help="HTTP/HTTPS proxy, e.g. http://host:port")
     ap.add_argument("-v", dest="debug", action="store_true", help="Enable verbose HTTP request/response logs and extra diagnostics")
-    ap.add_argument("-t", dest="throttle", type=float, default=1.0, help="Seconds delay between episode requests (default: 1.0)")
+    ap.add_argument("-t", dest="throttle", type=float, default=1.25, help="Seconds delay between episode requests (default: 1.25)")
     ap.add_argument("-w", dest="workers", type=int, default=1, help="Parallel chapter fetch workers (default: 1). Increase to speed up fetching, but beware of hitting rate limits.")
     ap.add_argument("-up", dest="update", action="store_true", help="Reuse cached chapters and fetch only missing/new chapters")
     ap.add_argument("-r", dest="retry_failed", action="store_true", help="Retry chapters that failed to fetch")

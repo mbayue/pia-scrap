@@ -27,7 +27,7 @@ class JobRequest(BaseModel):
     lang: str = "en"
     proxy: Optional[str] = None
     debug: bool = False
-    throttle: float = 1.0
+    throttle: float = 1.25
     workers: int = 1
     update: bool = False
     retry_failed: bool = False
@@ -563,7 +563,7 @@ HTML = r"""
                 <summary>Download Options</summary>
                 <div class="details-body">
                   <input name="workers" type="hidden" value="1">
-                  <input name="throttle" type="hidden" value="1.0">
+                  <input name="throttle" type="hidden" value="1.25">
                   <div class="check-grid">
                     <label class="check"><input name="update" type="checkbox"> Update existing cache</label>
                     <label class="check"><input name="retry_failed" type="checkbox"> Retry failed chapters</label>
@@ -895,7 +895,7 @@ form.addEventListener("submit", async (event) => {
     lang: value("lang") || "en",
     proxy: value("proxy"),
     debug: value("debug"),
-    throttle: value("throttle") ?? 1.0,
+    throttle: value("throttle") ?? 1.25,
     workers: value("workers") ?? 1,
     update: value("update"),
     retry_failed: value("retry_failed"),
@@ -951,7 +951,7 @@ clearButton.addEventListener("click", () => {
   form.elements.lang.value = "en";
   form.elements.max_chapters.value = "0";
   form.elements.workers.value = "1";
-  form.elements.throttle.value = "1.0";
+  form.elements.throttle.value = "1.25";
   setError("");
 });
 
