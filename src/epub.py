@@ -48,7 +48,9 @@ class EpubBuilder:
                     continue
                 resp.raise_for_status()
                 return resp.content
-            except Exception:
+            except Exception as e:
+                if self.debug_dump:
+                    print(f"[debug] image fetch failed: {url}: {e}")
                 if attempt < 3:
                     time.sleep(1.0)
                 continue

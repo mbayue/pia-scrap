@@ -214,8 +214,8 @@ class NovelpiaClient:
                 v = data_block.get(k)
                 if isinstance(v, str) and v:
                     parts.append(v)
-        except Exception:
-            pass
+        except Exception as e:
+            return {"error": f"episode content parse failed: {e}", "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
         html_text = "".join(parts).strip()
         if not html_text:
@@ -227,8 +227,13 @@ class NovelpiaClient:
                 or ""
             )
 
+        try:
+            html = html_from_episode_text(html_text)
+        except Exception as e:
+            return {"error": f"episode HTML normalization failed: {e}", "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
+
         return {
-            "html": html_from_episode_text(html_text),
+            "html": html,
             "epi_title": epi_title,
             "epi_no": epi_no,
             "idx": idx,

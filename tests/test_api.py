@@ -80,3 +80,38 @@ def test_novelpia_client_close_closes_session(monkeypatch):
     client.close()
 
     assert closed == [True]
+
+
+def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {"_t": "token"}})
+    monkeypatch.setattr(client, "episode_content", lambda _token: {"result": {"data": []}})
+
+    result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
+
+    assert result == {
+        "error": "episode content parse failed: 'list' object has no attribute 'keys'",
+        "epi_no": 123,
+        "epi_title": "Bad",
+        "idx": 4,
+    }
+
+
+def test_fetch_episode_returns_error_on_html_normalization_failure(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {"_t": "token"}})
+    monkeypatch.setattr(client, "episode_content", lambda _token: {"result": {"data": {"epi_content": "<p>x</p>"}}})
+
+    def fail_normalize(_html):
+        raise RuntimeError("bad html")
+
+    monkeypatch.setattr("src.api.html_from_episode_text", fail_normalize)
+
+    result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
+
+    assert result == {
+        "error": "episode HTML normalization failed: bad html",
+        "epi_no": 123,
+        "epi_title": "Bad",
+        "idx": 4,
+    }
