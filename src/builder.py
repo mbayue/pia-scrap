@@ -1,9 +1,10 @@
 import json
 import os
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from collections.abc import Iterable
 
 from bs4 import BeautifulSoup
 from tqdm import tqdm
+
 from src.epub import EpubBuilder
 from src.helper import ensure_dir, kebab, sanitize_filename
 from src.novel import fetch_novel_and_episodes
@@ -12,19 +13,19 @@ from src.novel import fetch_novel_and_episodes
 # Main Build Function
 # ----------------------------
 
-def _episode_no(ep: Dict) -> Optional[int]:
+def _episode_no(ep: dict) -> int | None:
     try:
         return int(ep.get("episode_no"))
     except Exception:
         return None
 
-def _chapter_idx(ep: Dict, fallback: int) -> int:
+def _chapter_idx(ep: dict, fallback: int) -> int:
     try:
         return int(ep.get("epi_num") or fallback)
     except Exception:
         return fallback
 
-def _chapter_title(ep: Dict) -> str:
+def _chapter_title(ep: dict) -> str:
     return ep.get("epi_title") or f"Episode {ep.get('epi_num')}"
 
 def _cache_dir(book_dir: str) -> str:
@@ -36,11 +37,11 @@ def _cache_file_path(book_dir: str, epi_no: int) -> str:
 def _failed_path(book_dir: str) -> str:
     return os.path.join(book_dir, "failed_chapters.jsonl")
 
-def _load_jsonl(path: str) -> List[Dict]:
-    rows: List[Dict] = []
+def _load_jsonl(path: str) -> list[dict]:
+    rows: list[dict] = []
     if not os.path.exists(path):
         return rows
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -53,8 +54,8 @@ def _load_jsonl(path: str) -> List[Dict]:
                 continue
     return rows
 
-def _load_cache(book_dir: str) -> Dict[int, Dict]:
-    cache: Dict[int, Dict] = {}
+def _load_cache(book_dir: str) -> dict[int, dict]:
+    cache: dict[int, dict] = {}
     cache_dir = _cache_dir(book_dir)
     if os.path.isdir(cache_dir):
         for name in os.listdir(cache_dir):
@@ -62,48 +63,50 @@ def _load_cache(book_dir: str) -> Dict[int, Dict]:
                 continue
             path = os.path.join(cache_dir, name)
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     row = json.load(f)
-            except Exception:
+            except Exception as e:
+                print(f"[warn] Ignoring unreadable cache file {path}: {e}")
                 continue
             if not isinstance(row, dict):
                 continue
             try:
                 epi_no = int(row.get("epi_no"))
-            except Exception:
+            except Exception as e:
+                print(f"[warn] Ignoring cache row with invalid epi_no in {path}: {e}")
                 continue
             html_text = row.get("html")
             if isinstance(html_text, str) and html_text:
                 cache[epi_no] = row
     return cache
 
-def _load_failed_episode_nos(book_dir: str) -> Set[int]:
-    failed: Set[int] = set()
+def _load_failed_episode_nos(book_dir: str) -> set[int]:
+    failed: set[int] = set()
     for row in _load_jsonl(_failed_path(book_dir)):
         epi_no = row.get("epi_no")
         if isinstance(epi_no, int):
             failed.add(epi_no)
     return failed
 
-def _write_jsonl(path: str, rows: Iterable[Dict]) -> None:
+def _write_jsonl(path: str, rows: Iterable[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-def _write_cache_item(book_dir: str, row: Dict) -> None:
+def _write_cache_item(book_dir: str, row: dict) -> None:
     epi_no = int(row["epi_no"])
     ensure_dir(_cache_dir(book_dir))
     with open(_cache_file_path(book_dir, epi_no), "w", encoding="utf-8") as f:
         json.dump(row, f, ensure_ascii=False, indent=2)
 
-def _fetch_with_cache(client, ep_list: List[Dict], book_dir: str, *,
-                      use_cache: bool = False, force_episode_nos: Optional[Set[int]] = None,
-                      max_workers: int = 1) -> Tuple[List[Dict], int]:
+def _fetch_with_cache(client, ep_list: list[dict], book_dir: str, *,
+                      use_cache: bool = False, force_episode_nos: set[int] | None = None,
+                      max_workers: int = 1) -> tuple[list[dict], int]:
     cache = _load_cache(book_dir) if use_cache else {}
     force_episode_nos = force_episode_nos or set()
-    results: List[Dict] = [{} for _ in ep_list]
-    fetch_items: List[Dict] = []
-    fetch_positions: List[int] = []
+    results: list[dict] = [{} for _ in ep_list]
+    fetch_items: list[dict] = []
+    fetch_positions: list[int] = []
 
     for pos, ep in enumerate(ep_list):
         epi_no = _episode_no(ep)
@@ -129,13 +132,13 @@ def _fetch_with_cache(client, ep_list: List[Dict], book_dir: str, *,
             progress_cb=update_pbar,
         )
         pbar.close()
-        for pos, res in zip(fetch_positions, fetched):
+        for pos, res in zip(fetch_positions, fetched, strict=False):
             results[pos] = res
     elif ep_list:
         print("[info] all requested chapters loaded from cache")
 
-    failed_rows: List[Dict] = []
-    for pos, (ep, res) in enumerate(zip(ep_list, results), 1):
+    failed_rows: list[dict] = []
+    for pos, (ep, res) in enumerate(zip(ep_list, results, strict=False), 1):
         epi_no = _episode_no(ep)
         title = _chapter_title(ep)
         idx = _chapter_idx(ep, pos)
@@ -194,7 +197,7 @@ def build_epub(client, novel_id, out_dir, start_chapter=None, end_chapter=None, 
     if (update or retry_failed) and fetched_count == 0:
         return None, title, 0
 
-    build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)   
+    build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)
 
     return builder.build(
         client=client,
@@ -247,7 +250,7 @@ def build_txt(client, novel_id, out_dir, start_chapter=None, end_chapter=None, m
             f.write(text)
 
         total += 1
-    
+
     build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)
 
     return book_dir, title, total
@@ -260,11 +263,11 @@ def build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters=None):
     author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
     description = (nv.get("novel_story") or "").strip()
-    
+
     tag_items = (data_novel.get("result", {}).get("tag_list")
                  or nv.get("tag_list")
                  or [])
-    tags: List[str] = []
+    tags: list[str] = []
     for t in tag_items:
         if isinstance(t, str):
             tags.append(t)

@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+
 from src.helper import normalize_url
 
 # ----------------------------
@@ -51,8 +52,8 @@ def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=N
         if str(res.get("statusCode")) == "200":
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
             print(f"[auth] Logged in as: {mem}")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[warn] auth check failed: {e}")
 
     print("[info] extracting metadata…")
     data_novel = client.novel(novel_id)
@@ -63,7 +64,7 @@ def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=N
     writers = data_novel["result"].get("writer_list") or []
     author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
-    
+
     print(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")
 
     rows = max(2, int(epi_cnt)) if epi_cnt else 1000

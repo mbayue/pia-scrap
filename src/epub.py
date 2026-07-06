@@ -1,12 +1,12 @@
 import html
 import os
 import time
-
-from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+
 from bs4 import BeautifulSoup
 from ebooklib import epub
 from tqdm import tqdm
+
 from src.api import NovelpiaClient
 from src.const import BASE_URL
 from src.helper import ensure_dir, kebab, media_type_from_ext, normalize_url
@@ -21,7 +21,7 @@ class EpubBuilder:
         self.debug_dump = debug_dump
         ensure_dir(out_dir)
 
-    def _fetch_headers(self, client: NovelpiaClient, url: str) -> Dict[str, str]:
+    def _fetch_headers(self, client: NovelpiaClient, url: str) -> dict[str, str]:
         headers = {
             "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "referer": BASE_URL + "/",
@@ -32,13 +32,14 @@ class EpubBuilder:
                 cookie_name = cookie.name
                 if cookie_name.startswith("CloudFront-") or cookie_name in ("Key-Pair-Id", "Policy", "Signature"):
                     cloudfront_parts.append(f"{cookie_name}={cookie.value}")
-        except Exception:
-            pass
+        except Exception as e:
+            if self.debug_dump:
+                print(f"[debug] image cookie header build failed: {e}")
         if cloudfront_parts:
             headers["Cookie"] = "; ".join(cloudfront_parts)
         return headers
 
-    def _fetch_bytes(self, client: NovelpiaClient, url: str) -> Optional[bytes]:
+    def _fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
         for attempt in range(1, 4):
             try:
                 resp = client.s.get(url, headers=self._fetch_headers(client, url), timeout=client.timeout)
@@ -56,11 +57,11 @@ class EpubBuilder:
                 continue
         return None
 
-    def build(self, client: NovelpiaClient, novel: Dict, episodes: List[Dict],
-              filename_hint: Optional[str] = None, language: str = "en",
-              author_fallback: str = "Unknown", css_text: Optional[str] = None,
-              novel_id: Optional[int] = None, fetched_results: Optional[List[Dict]] = None,
-              max_workers: int = 1) -> Tuple[str, str, int]:
+    def build(self, client: NovelpiaClient, novel: dict, episodes: list[dict],
+              filename_hint: str | None = None, language: str = "en",
+              author_fallback: str = "Unknown", css_text: str | None = None,
+              novel_id: int | None = None, fetched_results: list[dict] | None = None,
+              max_workers: int = 1) -> tuple[str, str, int]:
         nv = novel["result"]["novel"]
         title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
         writers = novel["result"].get("writer_list") or []
@@ -95,15 +96,15 @@ class EpubBuilder:
                               media_type="text/css", content=default_css.encode("utf-8"))
         book.add_item(style)
 
-        spine: List = ["nav"]
-        toc: List = []
-        image_cache: Dict[str, str] = {}
+        spine: list = ["nav"]
+        toc: list = []
+        image_cache: dict[str, str] = {}
         img_index = 1
 
-        def add_images_and_rewrite(html_str: str) -> Tuple[str, List[epub.EpubItem]]:
+        def add_images_and_rewrite(html_str: str) -> tuple[str, list[epub.EpubItem]]:
             nonlocal img_index
             soup = BeautifulSoup(html_str, "lxml")
-            added_items: List[epub.EpubItem] = []
+            added_items: list[epub.EpubItem] = []
 
             for img in soup.find_all("img"):
                 src = img.get("src")
@@ -156,7 +157,7 @@ class EpubBuilder:
 
             html_text = res["html"]
             epi_title = res["epi_title"]
-            
+
             html_text, new_imgs = add_images_and_rewrite(html_text)
 
             chapter = epub.EpubHtml(
@@ -183,7 +184,11 @@ class EpubBuilder:
         meta_parts = []
         meta_parts.append(f"<h1>{html.escape(title)}</h1>")
         if has_cover:
-            meta_parts.append("<p><img src='cover.jpg' alt='Cover' style='width:230px;max-width:90%;height:auto;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>")
+            meta_parts.append(
+                "<p><img src='cover.jpg' alt='Cover' "
+                "style='width:230px;max-width:90%;height:auto;border-radius:12px;"
+                "box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>"
+            )
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
         meta_parts.append(f"<p><strong>Status:</strong> {html.escape(status)}</p>")

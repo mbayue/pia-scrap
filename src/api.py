@@ -1,17 +1,17 @@
+import concurrent.futures
 import json
 import os
 import random
+import re as _re
 import time
 import uuid
-import requests
-import concurrent.futures
-import re as _re
-
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+import requests
+
 from src import const
-from src.helper import j, mask_kv, attach_auth_cookies, merge_login_at
-from src.helper import extract_t_token
+from src.helper import attach_auth_cookies, extract_t_token, j, mask_kv, merge_login_at
 from src.novel import html_from_episode_text
 
 # ----------------------------
@@ -20,18 +20,18 @@ from src.novel import html_from_episode_text
 
 @dataclass
 class Tokens:
-    login_at: Optional[str] = None
-    tkey: Optional[str] = None
-    userkey: Optional[str] = None
+    login_at: str | None = None
+    tkey: str | None = None
+    userkey: str | None = None
 
 
 RETRY_WAIT_SECONDS = 1.0
 
 
 class NovelpiaClient:
-    def __init__(self, email: Optional[str] = None, password: Optional[str] = None,
-                 proxy: Optional[str] = None, timeout: int = 30, throttle: float = 1.25,
-                 userkey: Optional[str] = None, tkey: Optional[str] = None):
+    def __init__(self, email: str | None = None, password: str | None = None,
+                 proxy: str | None = None, timeout: int = 30, throttle: float = 1.25,
+                 userkey: str | None = None, tkey: str | None = None):
         self.s = requests.Session()
         self.s.headers.update(const.SESSION_HEADERS.copy())
         if proxy:
@@ -72,10 +72,10 @@ class NovelpiaClient:
                     self.tokens.tkey = c.value
                 elif c.name == "USERKEY":
                     self.tokens.userkey = c.value
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error occurred while reading login cookies: {e}")
 
-    def refresh(self) -> Optional[str]:
+    def refresh(self) -> str | None:
         url = f"{const.API_BASE}/v1/login/refresh"
         r = request_with_retries(
             self.s, "GET", url,
@@ -86,10 +86,10 @@ class NovelpiaClient:
         self.tokens.login_at = r.json()["result"]["LOGINAT"]
         # Persist refreshed token to config
         try:
-            cfg: Dict[str, Any] = {}
+            cfg: dict[str, Any] = {}
             if os.path.exists(const.CONFIG_PATH):
                 try:
-                    with open(const.CONFIG_PATH, "r", encoding="utf-8") as f:
+                    with open(const.CONFIG_PATH, encoding="utf-8") as f:
                         cfg = json.load(f) or {}
                 except Exception as e:
                     print(f"Error loading config: {e}")
@@ -103,59 +103,59 @@ class NovelpiaClient:
             pass
         return self.tokens.login_at
 
-    def me(self) -> Dict:
+    def me(self) -> dict:
         url = f"{const.API_BASE}/v1/login/me"
         r = request_with_retries(
             self.s, "GET", url,
             headers=merge_login_at({}, self.tokens.login_at),
-            timeout=self.timeout, allow_refresh=True, 
+            timeout=self.timeout, allow_refresh=True,
             refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
 
-    def novel(self, novel_id: int) -> Dict:
+    def novel(self, novel_id: int) -> dict:
         url = f"{const.API_BASE}/v1/novel"
         r = request_with_retries(
             self.s, "GET", url,
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id},
-            timeout=self.timeout, allow_refresh=True, 
+            timeout=self.timeout, allow_refresh=True,
             refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
 
-    def episode_list(self, novel_id: int, rows: int) -> Dict:
+    def episode_list(self, novel_id: int, rows: int) -> dict:
         url = f"{const.API_BASE}/v1/novel/episode/list"
         r = request_with_retries(
             self.s, "GET", url,
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id, "rows": rows, "sort": "ASC"},
-            timeout=self.timeout, allow_refresh=True, 
+            timeout=self.timeout, allow_refresh=True,
             refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
         return r.json()
 
-    def episode_ticket(self, episode_no: int) -> Dict:
+    def episode_ticket(self, episode_no: int) -> dict:
         url = f"{const.API_BASE}/v1/novel/episode"
         headers = merge_login_at({}, self.tokens.login_at)
         params = {"episode_no": episode_no}
         # Throttle once per chapter before the ticket/content pair.
         if self.throttle:
-            time.sleep(self.throttle + random.uniform(0.1, 0.4))
+            time.sleep(self.throttle + random.SystemRandom().uniform(0.1, 0.4))
         r = request_with_retries(
             self.s, "GET", url,
             headers=headers, params=params,
-            timeout=self.timeout, allow_refresh=True, 
+            timeout=self.timeout, allow_refresh=True,
             refresh_fn=self.refresh, login_fn=self.login,
             max_retries=3,
         )
         r.raise_for_status()
         return r.json()
 
-    def episode_content(self, token_t: str) -> Dict:
+    def episode_content(self, token_t: str) -> dict:
         url = f"{const.API_BASE}/v1/novel/episode/content"
         r = request_with_retries(
             self.s, "GET", url,
@@ -166,7 +166,7 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
-    def fetch_episode(self, ep: Dict, idx: int = 0) -> Dict:
+    def fetch_episode(self, ep: dict, idx: int = 0) -> dict:
         """Fetch ticket and content for a single episode."""
         episode_no = ep.get("episode_no")
         if episode_no is None:
@@ -178,7 +178,7 @@ class NovelpiaClient:
             }
         epi_no = int(episode_no)
         epi_title = ep.get("epi_title") or f"Episode {ep.get('epi_num')}"
-        
+
         # 1) Ticket
         try:
             tdata = self.episode_ticket(epi_no)
@@ -230,7 +230,12 @@ class NovelpiaClient:
         try:
             html = html_from_episode_text(html_text)
         except Exception as e:
-            return {"error": f"episode HTML normalization failed: {e}", "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
+            return {
+                "error": f"episode HTML normalization failed: {e}",
+                "epi_no": epi_no,
+                "epi_title": epi_title,
+                "idx": idx,
+            }
 
         return {
             "html": html,
@@ -239,12 +244,14 @@ class NovelpiaClient:
             "idx": idx,
         }
 
-    def fetch_episodes_parallel(self, ep_list: List[Dict[str, Any]], max_workers: int = 1, progress_cb=None) -> List[Dict[str, Any]]:
+    def fetch_episodes_parallel(
+        self, ep_list: list[dict[str, Any]], max_workers: int = 1, progress_cb=None
+    ) -> list[dict[str, Any]]:
         """Fetch multiple episodes in parallel."""
-        results: List[Dict[str, Any]] = [{} for _ in range(len(ep_list))]
+        results: list[dict[str, Any]] = [{} for _ in range(len(ep_list))]
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_idx = {
-                executor.submit(self.fetch_episode, ep, i+1): i 
+                executor.submit(self.fetch_episode, ep, i+1): i
                 for i, ep in enumerate(ep_list)
             }
             for future in concurrent.futures.as_completed(future_to_idx):
@@ -297,7 +304,7 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                     print(f"[api]   json:    {j(mask_kv(json))}")
 
             r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
-        
+
             if r.status_code == 500:
                 if const.HTTP_LOG:
                     print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
@@ -310,8 +317,9 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                 try:
                     body = r.json()
                     api_message = body.get("errmsg") or body.get("message") or ""
-                except Exception:
-                    pass
+                except Exception as e:
+                    if const.HTTP_LOG:
+                        print(f"Error occurred while reading API error message: {e}")
                 if attempt >= max_retries:
                     detail = api_message or "Server error"
                     raise requests.HTTPError(detail, response=r)
@@ -330,8 +338,9 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                     try:
                         body = r.json()
                         msg = (body.get("errmsg") or body.get("message") or "").lower()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if const.HTTP_LOG:
+                            print(f"Error occurred while reading API error response: {e}")
                     if "token" in msg and "expire" in msg:
                         trigger_refresh = True
 
@@ -340,29 +349,36 @@ def request_with_retries(session: requests.Session, method: str, url: str, *,
                         success = False
                         # Try refresh first
                         if refresh_fn and not did_refresh:
-                            if const.HTTP_LOG: print("[api] Session expired, trying refresh...")
+                            if const.HTTP_LOG:
+                                print("[api] Session expired, trying refresh...")
                             try:
                                 refresh_fn()
                                 did_refresh = True
                                 success = True
                             except Exception:
-                                if const.HTTP_LOG: print("[api] Refresh failed.")
-                        
+                                if const.HTTP_LOG:
+                                    print("[api] Refresh failed.")
+
                         # Try full login if refresh failed or not available
                         if not success and login_fn and not did_login:
-                            if const.HTTP_LOG: print("[api] Refresh failed or unavailable, trying full re-login...")
+                            if const.HTTP_LOG:
+                                print("[api] Refresh failed or unavailable, trying full re-login...")
                             try:
                                 login_fn()
                                 did_login = True
                                 success = True
                             except Exception as e:
-                                if const.HTTP_LOG: print(f"[api] Re-login failed: {e}")
+                                if const.HTTP_LOG:
+                                    print(f"[api] Re-login failed: {e}")
 
                         if success:
                             # Retry original request once
-                            r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
+                            r = session.request(
+                                method, url, headers=headers, params=params, json=json, data=data, timeout=timeout
+                            )
                     except Exception as e:
-                        if const.HTTP_LOG: print(f"[api] Auth recovery failed: {e}")
+                        if const.HTTP_LOG:
+                            print(f"[api] Auth recovery failed: {e}")
 
             return r
         except requests.RequestException as e:

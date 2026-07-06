@@ -20,7 +20,9 @@ def test_fetch_with_cache_uses_cache_and_fetches_missing(tmp_path):
     book_dir = tmp_path / "book"
     cache_dir = book_dir / ".cache"
     cache_dir.mkdir(parents=True)
-    (cache_dir / "10.json").write_text(json.dumps({"epi_no": 10, "html": "cached", "epi_title": "Cached"}), encoding="utf-8")
+    (cache_dir / "10.json").write_text(
+        json.dumps({"epi_no": 10, "html": "cached", "epi_title": "Cached"}), encoding="utf-8"
+    )
     client = DummyClient([{"epi_no": 11, "html": "fresh", "epi_title": "Fresh"}])
     episodes = [
         {"episode_no": 10, "epi_num": 1, "epi_title": "Cached"},

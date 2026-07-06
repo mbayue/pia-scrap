@@ -2,7 +2,6 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -12,9 +11,8 @@ from src import builder as builder_module
 from src import epub as epub_module
 from src.runner import QueueOptions, parse_queue_lines, run_queue
 
-
 app = FastAPI(title="PIA Scrap")
-jobs: Dict[str, Dict] = {}
+jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 MAX_STORED_JOBS = 50
 ACTIVE_JOB_STATUSES = {"queued", "running"}
@@ -23,21 +21,21 @@ ACTIVE_JOB_STATUSES = {"queued", "running"}
 class JobRequest(BaseModel):
     novel_text: str
     out: str = "output"
-    start_chapter: Optional[int] = None
-    end_chapter: Optional[int] = None
+    start_chapter: int | None = None
+    end_chapter: int | None = None
     max_chapters: int = 0
     lang: str = "en"
-    proxy: Optional[str] = None
+    proxy: str | None = None
     debug: bool = False
     throttle: float = 1.25
     workers: int = 1
     update: bool = False
     retry_failed: bool = False
     txt: bool = False
-    email: Optional[str] = None
-    password: Optional[str] = None
-    cookie_file: Optional[str] = None
-    cookie_text: Optional[str] = None
+    email: str | None = None
+    password: str | None = None
+    cookie_file: str | None = None
+    cookie_text: str | None = None
 
 
 def _append_log(job_id: str, message: str) -> None:
@@ -126,7 +124,7 @@ def create_job(request: JobRequest):
     try:
         novel_ids = parse_queue_lines(request.novel_text.splitlines(), source="web")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not novel_ids:
         raise HTTPException(status_code=400, detail="Enter at least one novel ID or Novelpia novel URL.")
 

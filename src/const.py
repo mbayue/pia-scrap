@@ -7,7 +7,7 @@ from pathlib import Path
 BASE_URL = "https://global.novelpia.com"
 API_BASE = "https://api-global.novelpia.com"
 IMG_BASE_HTTPS = "https:"
-HTTP_LOG = False 
+HTTP_LOG = False
 CONFIG_PATH = Path(__file__).resolve().parent.parent / ".api.json"
 
 SESSION_HEADERS = {

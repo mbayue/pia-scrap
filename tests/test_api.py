@@ -1,7 +1,6 @@
 import requests
 
-from src.api import request_with_retries
-from src.api import NovelpiaClient
+from src.api import NovelpiaClient, request_with_retries
 
 
 class FakeResponse:

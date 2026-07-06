@@ -5,10 +5,9 @@ import os
 import re
 import tempfile
 from http.cookiejar import MozillaCookieJar
-
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
-import requests
+
 from src.const import BASE_URL, CONFIG_PATH, IMG_BASE_HTTPS
 
 # ----------------------------
@@ -42,7 +41,7 @@ def media_type_from_ext(ext: str) -> str:
         return "image/webp"
     return "image/jpeg"
 
-def looks_like_jwt(token: Optional[str]) -> bool:
+def looks_like_jwt(token: str | None) -> bool:
     if not isinstance(token, str):
         return False
     parts = token.split(".")
@@ -64,17 +63,17 @@ def kebab(s: str) -> str:
 # Config management
 # ----------------------------
 
-def load_config() -> Dict[str, Any]:
+def load_config() -> dict[str, Any]:
     try:
         if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
                 return json.load(f) or {}
     except Exception as e:
         print(f"Error occurred while loading config: {e}")
         return {}
     return {}
 
-def save_config(cfg: Dict[str, Any]) -> None:
+def save_config(cfg: dict[str, Any]) -> None:
     tmp_path = ""
     try:
         config_dir = os.path.dirname(CONFIG_PATH) or "."
@@ -99,7 +98,7 @@ def save_config(cfg: Dict[str, Any]) -> None:
 # Auth token management & header merging
 # ----------------------------
 
-def merge_login_at(headers: dict, login_at: Optional[str]) -> dict:
+def merge_login_at(headers: dict, login_at: str | None) -> dict:
     h = dict(headers or {})
     if login_at:
         h["login-at"] = login_at
@@ -135,7 +134,7 @@ def _mask_value(v: Any) -> Any:
     except Exception:
         return "<masked>"
 
-def mask_kv(d: Optional[dict]) -> Optional[dict]:
+def mask_kv(d: dict | None) -> dict | None:
     if not isinstance(d, dict):
         return d
     out = {}
@@ -151,7 +150,7 @@ def j(x: Any) -> str:
         return json.dumps(x, ensure_ascii=False)
     except Exception:
         return str(x)
-    
+
 def load_netscape_cookies(path: str) -> MozillaCookieJar:
     jar = MozillaCookieJar()
     jar.load(path, ignore_discard=True, ignore_expires=True)
@@ -171,7 +170,7 @@ def load_netscape_cookies_text(cookie_text: str) -> MozillaCookieJar:
             pass
     return jar
 
-def get_cookie_value(cookie_jar, name: str) -> Optional[str]:
+def get_cookie_value(cookie_jar, name: str) -> str | None:
     target = name.lower()
     try:
         for cookie in cookie_jar:
@@ -226,13 +225,13 @@ def iter_strings(obj):
         for v in obj:
             yield from iter_strings(v)
 
-def extract_t_token(tdata: dict) -> Tuple[Optional[str], Optional[str]]:
+def extract_t_token(tdata: dict) -> tuple[str | None, str | None]:
     """Return (token, direct_content_url_or_none).
     Prefer JWT-like tokens, but accept any non-empty string if present.
     If using URL, accept any _t value on the official content endpoint.
     """
     res = tdata.get("result", {}) if isinstance(tdata, dict) else {}
-    fallback_token: Optional[str] = None
+    fallback_token: str | None = None
 
     # 1) common keys at result
     for k in ("_t", "t", "token"):

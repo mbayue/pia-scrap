@@ -71,6 +71,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "test_*.py" = ["S101", "T201"]
+"web_app.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
