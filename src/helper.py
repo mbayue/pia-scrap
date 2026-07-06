@@ -75,10 +75,23 @@ def load_config() -> Dict[str, Any]:
     return {}
 
 def save_config(cfg: Dict[str, Any]) -> None:
+    tmp_path = ""
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        config_dir = os.path.dirname(CONFIG_PATH) or "."
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=config_dir, delete=False) as f:
+            tmp_path = f.name
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp_path, CONFIG_PATH)
     except Exception as e:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         print(f"Error occurred while saving config: {e}")
         pass
 
