@@ -1,4 +1,13 @@
-from web_app import MAX_STORED_JOBS, JobRequest, _prune_finished_jobs_locked, create_job, get_job, jobs, jobs_lock
+from web_app import (
+    MAX_STORED_JOBS,
+    JobRequest,
+    _prune_finished_jobs_locked,
+    create_job,
+    get_job,
+    index,
+    jobs,
+    jobs_lock,
+)
 
 
 class DummyThread:
@@ -37,3 +46,10 @@ def test_create_job_and_get_job_without_starting_worker(monkeypatch):
     assert job["rows"] == []
     with jobs_lock:
         jobs.clear()
+
+
+def test_index_serves_template_html():
+    html = index()
+
+    assert "<title>PIA Scrap</title>" in html
+    assert 'id="job-form"' in html
