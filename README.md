@@ -34,7 +34,7 @@ Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or mo
 
 ## Requirements
 
-* Python 3.9+
+* Python 3.10+
 * Packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `fastapi`, `uvicorn`, `PySocks`
 
 Install packages:
