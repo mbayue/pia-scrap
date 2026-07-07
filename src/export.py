@@ -82,7 +82,9 @@ class ImageFetcher:
                 if ext is None:
                     ext = os.path.splitext(urlparse(url).path)[1].lower()
                 if ext not in SUPPORTED_IMAGE_EXTENSIONS:
-                    ext = ".jpg"
+                    return None
+                if not resp.content:
+                    return None
                 return resp.content, ext
             except requests.HTTPError as exc:
                 status_code = exc.response.status_code if exc.response is not None else 0
