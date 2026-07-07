@@ -1,6 +1,6 @@
 # PIA SCRAP (API): Novelpia → EPUB
 
-Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one or more `novel_id` values (for example, `49`), the script fetches novel metadata, episodes, chapter HTML, images, and cover data, then writes output with cache and retry metadata.
+Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one or more `novel_id` values (for example, `5522`), the script fetches novel metadata, episodes, chapter HTML, images, and cover data, then writes output with cache and retry metadata.
 
 > Use responsibly. Only download what your account can legitimately access. Respect Novelpia’s Terms and copyright.
 
@@ -69,13 +69,13 @@ Each zip contains the executable, `README.md`, and `.env.example`. Copy `.env.ex
 Linux:
 
 ```bash
-./pia-scrap 49
+./pia-scrap 5522
 ```
 
 Windows:
 
 ```powershell
-.\pia-scrap.exe 49
+.\pia-scrap.exe 5522
 ```
 
 To build the same executable locally, install PyInstaller and run:
@@ -101,7 +101,7 @@ python main.py [NOVEL_ID ...] [-q FILE] [-u EMAIL] [-p PASSWORD]
 
 Arguments
 
-* `NOVEL_ID` (positional) — one or more numeric `novel_no` values, e.g. `49` or `41 1348 216`
+* `NOVEL_ID` (positional) — one or more numeric `novel_no` values, e.g. `5522` or `5522 5760`
 * `-q` — read novel IDs or Novelpia novel URLs from a text file, one per line. Blank lines and `#` comments are ignored.
 * `-u`, `-p` — login once; tokens saved to `.api.json` for reuse.
 * `-out`, `-o` — output directory (default: `output`).
@@ -124,34 +124,33 @@ Arguments
 1) First run with your Novelpia credentials (tokens are persisted to `.api.json`):
 
 ```bash
-python main.py 49 -u you@example.com -p "your-password"
+python main.py 5522 -u you@example.com -p "your-password"
 ```
 
 1) Subsequent runs can reuse stored tokens (no password on the command line):
 
 ```bash
-python main.py 49
+python main.py 5522
 ```
 
 1) Update an ongoing novel later without redownloading cached chapters:
 
 ```bash
-python main.py 49 -up
+python main.py 5522 -up
 ```
 
 1) Queue multiple novels with the same options:
 
 ```bash
-python main.py 4565 1234 468 -up
+python main.py 5522 5760 -up
 ```
 
 1) Keep an update queue in a text file:
 
 ```txt
 # novels.txt
-https://global.novelpia.com/novel/4565
-https://global.novelpia.com/novel/1234
-https://global.novelpia.com/novel/468
+https://global.novelpia.com/novel/5522
+https://global.novelpia.com/novel/5760
 ```
 
 ```bash
@@ -164,7 +163,7 @@ Duplicate novel IDs are skipped after positional IDs and queue files are merged.
 1) Retry only chapters that failed during a previous run:
 
 ```bash
-python main.py 49 -r
+python main.py 5522 -r
 ```
 
 ### Web App
