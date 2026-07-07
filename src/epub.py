@@ -1,16 +1,14 @@
 import html
 import os
-import time
-from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
 from ebooklib import epub
 from tqdm import tqdm
 
 from src.api import NovelpiaClient
 from src.const import BASE_URL
 from src.contracts import ChapterResult, EpisodeItem, NovelResponse
-from src.helper import ensure_dir, kebab, media_type_from_ext, normalize_url
+from src.export import EpubImageAdapter, ImageFetcher
+from src.helper import ensure_dir, kebab, normalize_url
 
 # ----------------------------
 # EPUB Builder
@@ -21,42 +19,13 @@ class EpubBuilder:
         self.out_dir = out_dir
         self.debug_dump = debug_dump
         ensure_dir(out_dir)
+        self._image_fetcher = ImageFetcher(debug_dump=debug_dump)
 
     def _fetch_headers(self, client: NovelpiaClient, url: str) -> dict[str, str]:
-        headers = {
-            "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "referer": BASE_URL + "/",
-        }
-        cloudfront_parts = []
-        try:
-            for cookie in client.s.cookies:
-                cookie_name = cookie.name
-                if cookie_name.startswith("CloudFront-") or cookie_name in ("Key-Pair-Id", "Policy", "Signature"):
-                    cloudfront_parts.append(f"{cookie_name}={cookie.value}")
-        except Exception as e:
-            if self.debug_dump:
-                print(f"[debug] image cookie header build failed: {e}")
-        if cloudfront_parts:
-            headers["Cookie"] = "; ".join(cloudfront_parts)
-        return headers
+        return self._image_fetcher.fetch_headers(client)
 
     def _fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
-        for attempt in range(1, 4):
-            try:
-                resp = client.s.get(url, headers=self._fetch_headers(client, url), timeout=client.timeout)
-                if resp.status_code == 429:
-                    wait = 2.0 * attempt
-                    time.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                return resp.content
-            except Exception as e:
-                if self.debug_dump:
-                    print(f"[debug] image fetch failed: {url}: {e}")
-                if attempt < 3:
-                    time.sleep(1.0)
-                continue
-        return None
+        return self._image_fetcher.fetch_bytes(client, url)
 
     def build(self, client: NovelpiaClient, novel: NovelResponse, episodes: list[EpisodeItem],
               filename_hint: str | None = None, language: str = "en",
@@ -100,43 +69,7 @@ class EpubBuilder:
 
         spine: list[str | epub.EpubHtml] = ["nav"]
         toc: list[epub.EpubHtml] = []
-        image_cache: dict[str, str] = {}
-        img_index = 1
-
-        def add_images_and_rewrite(html_str: str) -> tuple[str, list[epub.EpubItem]]:
-            nonlocal img_index
-            soup = BeautifulSoup(html_str, "lxml")
-            added_items: list[epub.EpubItem] = []
-
-            for img in soup.find_all("img"):
-                src = img.get("src")
-                if not src:
-                    continue
-                src = normalize_url(src)
-                if src in image_cache:
-                    img["src"] = image_cache[src]
-                    continue
-
-                path = urlparse(src).path
-                ext = os.path.splitext(path)[1].lower() or ".jpg"
-                if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-                    ext = ".jpg"
-
-                img_bytes = self._fetch_bytes(client, src)
-                if not img_bytes:
-                    # leave external
-                    continue
-
-                fname = f"images/img_{img_index:05d}{ext}"
-                image_cache[src] = fname
-                img_index += 1
-
-                item = epub.EpubItem(uid=f"img{img_index}", file_name=fname,
-                                     media_type=media_type_from_ext(ext), content=img_bytes)
-                added_items.append(item)
-                img["src"] = fname
-
-            return str(soup), added_items
+        image_adapter = EpubImageAdapter(self._image_fetcher, client)
 
         if fetched_results is None:
             pbar = tqdm(total=len(episodes), desc="[info] fetching chapters", unit="chap")
@@ -160,7 +93,7 @@ class EpubBuilder:
             html_text = res.get("html") or ""
             epi_title = res.get("epi_title") or f"Episode {i}"
 
-            html_text, new_imgs = add_images_and_rewrite(html_text)
+            html_text, new_imgs = image_adapter.add_images_and_rewrite(html_text)
 
             chapter = epub.EpubHtml(
                 title=epi_title,

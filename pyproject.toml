@@ -93,6 +93,19 @@ ignore_missing_imports = true
 module = ["ebooklib", "bs4", "tqdm"]
 ignore_missing_imports = true
 
+[tool.pyright]
+include = ["main.py", "web_app.py", "src", "tests"]
+exclude = [
+    ".venv",
+    "**/__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "build",
+    "dist",
+    "output",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

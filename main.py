@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-from src.runner import QueueOptions, load_queue_file, print_queue_summary, run_queue
+from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
 
 
 def main():
@@ -49,42 +49,18 @@ def main():
     ap.add_argument("-txt", dest="txt", action="store_true", help="Output plain .txt files per episode instead of EPUB")
     args = ap.parse_args()
 
-    novel_ids = list(args.novel_ids)
-    for queue_path in args.queue:
-        try:
-            novel_ids.extend(load_queue_file(queue_path))
-        except OSError as e:
-            ap.error(f"Unable to read queue file '{queue_path}': {e}")
-        except ValueError as e:
-            ap.error(str(e))
-
-    if not novel_ids:
-        ap.error("provide at least one novel_id or -q FILE")
-
-    options = QueueOptions(
-        out=args.out,
-        start_chapter=args.start_chapter,
-        end_chapter=args.end_chapter,
-        max_chapters=args.max_chapters,
-        lang=args.lang,
-        proxy=args.proxy,
-        debug=args.debug,
-        throttle=args.throttle,
-        workers=args.workers,
-        update=args.update,
-        retry_failed=args.retry_failed,
-        txt=args.txt,
-        email=args.email,
-        password=args.password,
-    )
+    try:
+        request = build_queue_request(args)
+    except CliUsageError as e:
+        ap.error(str(e))
 
     try:
-        result = run_queue(novel_ids, options)
+        result = run_queue(request.novel_ids, request.options)
     except Exception as e:
         print(f"[error] {e}")
         sys.exit(1)
 
-    if len(novel_ids) > 1 or args.queue:
+    if request.show_summary:
         print_queue_summary(result["rows"])
 
     if result["failures"]:

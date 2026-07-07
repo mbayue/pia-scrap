@@ -1,21 +1,33 @@
 import os
 import threading
-import uuid
-from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from src import builder as builder_module
-from src import epub as epub_module
-from src.runner import QueueOptions, parse_queue_lines, run_queue
+from src import web_jobs
+from src.runner import QueueOptions
+from src.web_jobs import (
+    DownloadUnavailableError,
+    JobInputError,
+    JobNotFoundError,
+    JobState,
+    ResultNotFoundError,
+    UnsafeDownloadPathError,
+    downloadable_path,
+)
+from src.web_jobs import (
+    create_job as create_web_job,
+)
+from src.web_jobs import (
+    get_job as get_web_job,
+)
 
 app = FastAPI(title="PIA Scrap")
-jobs: dict[str, dict] = {}
-jobs_lock = threading.Lock()
-MAX_STORED_JOBS = 50
-ACTIVE_JOB_STATUSES = {"queued", "running"}
+MAX_STORED_JOBS = web_jobs.MAX_STORED_JOBS
+jobs = web_jobs.jobs
+jobs_lock = web_jobs.jobs_lock
+_prune_finished_jobs_locked = web_jobs.prune_finished_jobs_locked
 
 
 class JobRequest(BaseModel):
@@ -38,96 +50,13 @@ class JobRequest(BaseModel):
     cookie_text: str | None = None
 
 
-def _append_log(job_id: str, message: str) -> None:
-    with jobs_lock:
-        jobs[job_id]["logs"].append(message)
-
-def _replace_or_append_log(job_id: str, message: str) -> None:
-    with jobs_lock:
-        logs = jobs[job_id]["logs"]
-        if logs and logs[-1].startswith("[info] fetching chapters"):
-            logs[-1] = message
-        else:
-            logs.append(message)
-
-def _prune_finished_jobs_locked() -> None:
-    overflow = len(jobs) - MAX_STORED_JOBS
-    if overflow <= 0:
-        return
-    finished_ids = [
-        job_id
-        for job_id, job in sorted(jobs.items(), key=lambda item: item[1].get("created_at", ""))
-        if job.get("status") not in ACTIVE_JOB_STATUSES
-    ]
-    for job_id in finished_ids[:overflow]:
-        jobs.pop(job_id, None)
-
-class _JobProgress:
-    def __init__(self, job_id: str, total: int = 0, desc: str = "", unit: str = "", **_kwargs):
-        self.job_id = job_id
-        self.total = int(total or 0)
-        self.desc = desc or "[info] progress"
-        self.unit = unit or "item"
-        self.count = 0
-        self._emit()
-
-    def update(self, amount: int = 1) -> None:
-        self.count += amount
-        self._emit()
-
-    def close(self) -> None:
-        self._emit()
-
-    def _emit(self) -> None:
-        if self.total:
-            message = f"{self.desc}: {self.count}/{self.total} {self.unit}"
-        else:
-            message = f"{self.desc}: {self.count} {self.unit}"
-        _replace_or_append_log(self.job_id, message)
-
-def _run_job(job_id: str, novel_ids: list[int], options: QueueOptions) -> None:
-    with jobs_lock:
-        jobs[job_id]["status"] = "running"
-        jobs[job_id]["started_at"] = datetime.now().isoformat(timespec="seconds")
-
-    try:
-        original_builder_tqdm = builder_module.tqdm
-        original_epub_tqdm = epub_module.tqdm
-        builder_module.tqdm = lambda *args, **kwargs: _JobProgress(job_id, *args, **kwargs)
-        epub_module.tqdm = lambda *args, **kwargs: _JobProgress(job_id, *args, **kwargs)
-        try:
-            result = run_queue(novel_ids, options, log=lambda msg: _append_log(job_id, msg))
-        finally:
-            builder_module.tqdm = original_builder_tqdm
-            epub_module.tqdm = original_epub_tqdm
-        with jobs_lock:
-            jobs[job_id]["status"] = "failed" if result["failures"] else "done"
-            jobs[job_id]["rows"] = result["rows"]
-            jobs[job_id]["failures"] = result["failures"]
-            jobs[job_id]["skipped_ids"] = result["skipped_ids"]
-            jobs[job_id]["finished_at"] = datetime.now().isoformat(timespec="seconds")
-    except Exception as e:
-        with jobs_lock:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(e)
-            jobs[job_id]["logs"].append(f"[error] {e}")
-            jobs[job_id]["finished_at"] = datetime.now().isoformat(timespec="seconds")
-
-
 @app.get("/", response_class=HTMLResponse)
-def index():
+def index() -> str:
     return HTML
 
 
 @app.post("/api/jobs")
-def create_job(request: JobRequest):
-    try:
-        novel_ids = parse_queue_lines(request.novel_text.splitlines(), source="web")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    if not novel_ids:
-        raise HTTPException(status_code=400, detail="Enter at least one novel ID or Novelpia novel URL.")
-
+def create_job(request: JobRequest) -> dict[str, str]:
     options = QueueOptions(
         out=request.out,
         start_chapter=request.start_chapter,
@@ -146,53 +75,32 @@ def create_job(request: JobRequest):
         cookie_file=request.cookie_file,
         cookie_text=request.cookie_text,
     )
-
-    job_id = uuid.uuid4().hex
-    with jobs_lock:
-        jobs[job_id] = {
-            "id": job_id,
-            "status": "queued",
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "logs": [],
-            "rows": [],
-            "failures": [],
-            "skipped_ids": [],
-            "error": None,
-        }
-        _prune_finished_jobs_locked()
-
-    thread = threading.Thread(target=_run_job, args=(job_id, novel_ids, options), daemon=True)
-    thread.start()
-    return {"job_id": job_id}
+    try:
+        return {"job_id": create_web_job(request.novel_text, options, threading.Thread)}
+    except JobInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
-    with jobs_lock:
-        job = jobs.get(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found.")
-        return dict(job)
+def get_job(job_id: str) -> JobState:
+    try:
+        return get_web_job(job_id)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found.") from exc
 
 
 @app.get("/download/{job_id}/{row_index}")
-def download(job_id: str, row_index: int):
-    with jobs_lock:
-        job = jobs.get(job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found.")
-        rows = job.get("rows", [])
-        if row_index < 0 or row_index >= len(rows):
-            raise HTTPException(status_code=404, detail="Result not found.")
-        path = rows[row_index].get("path")
-
-    if not path or not os.path.isfile(path):
-        raise HTTPException(status_code=404, detail="No downloadable file for this result.")
-
-    base = os.path.abspath(os.getcwd())
-    resolved = os.path.abspath(path)
-    if not resolved.startswith(base + os.sep):
-        raise HTTPException(status_code=403, detail="Refusing to serve a file outside the project.")
+def download(job_id: str, row_index: int) -> FileResponse:
+    try:
+        resolved = downloadable_path(job_id, row_index)
+    except JobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found.") from exc
+    except ResultNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Result not found.") from exc
+    except DownloadUnavailableError as exc:
+        raise HTTPException(status_code=404, detail="No downloadable file for this result.") from exc
+    except UnsafeDownloadPathError as exc:
+        raise HTTPException(status_code=403, detail="Refusing to serve a file outside the project.") from exc
 
     return FileResponse(resolved, filename=os.path.basename(resolved))
 

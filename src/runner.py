@@ -1,3 +1,4 @@
+import argparse
 import base64
 import os
 import re
@@ -9,7 +10,15 @@ from dotenv import load_dotenv
 from src import const
 from src.api import NovelpiaClient
 from src.builder import build_epub, build_txt
-from src.helper import get_cookie_value, load_config, load_netscape_cookies, load_netscape_cookies_text, save_config
+from src.contracts import QueueResult, QueueSummaryRow
+from src.helper import (
+    cookie_auth_from_jar,
+    is_placeholder_userkey,
+    load_config,
+    load_netscape_cookies,
+    load_netscape_cookies_text,
+    save_config,
+)
 
 LogFn = Callable[[str], None]
 
@@ -33,6 +42,15 @@ class QueueOptions:
     cookie_file: str | None = None
     cookie_text: str | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class QueueRequest:
+    novel_ids: list[int]
+    options: QueueOptions
+    show_summary: bool
+
+class CliUsageError(ValueError):
+    pass
 
 def _parse_novel_token(item: str) -> int:
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
@@ -59,6 +77,40 @@ def load_queue_file(path: str) -> list[int]:
     with open(path, encoding="utf-8") as f:
         return parse_queue_lines(f, source=path)
 
+
+def build_queue_request(args: argparse.Namespace) -> QueueRequest:
+    novel_ids = list(args.novel_ids)
+    for queue_path in args.queue:
+        try:
+            novel_ids.extend(load_queue_file(queue_path))
+        except OSError as e:
+            raise CliUsageError(f"Unable to read queue file '{queue_path}': {e}") from e
+        except ValueError as e:
+            raise CliUsageError(str(e)) from e
+
+    if not novel_ids:
+        raise CliUsageError("provide at least one novel_id or -q FILE")
+
+    return QueueRequest(
+        novel_ids=novel_ids,
+        options=QueueOptions(
+            out=args.out,
+            start_chapter=args.start_chapter,
+            end_chapter=args.end_chapter,
+            max_chapters=args.max_chapters,
+            lang=args.lang,
+            proxy=args.proxy,
+            debug=args.debug,
+            throttle=args.throttle,
+            workers=args.workers,
+            update=args.update,
+            retry_failed=args.retry_failed,
+            txt=args.txt,
+            email=args.email,
+            password=args.password,
+        ),
+        show_summary=len(novel_ids) > 1 or bool(args.queue),
+    )
 
 def dedupe_novel_ids(novel_ids: Iterable[int]) -> tuple[list[int], list[int]]:
     unique_ids: list[int] = []
@@ -90,9 +142,11 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
     const.HTTP_LOG = bool(options.debug)
 
     cfg = load_config()
-    cfg_login_at = (cfg.get("login_at") or "").strip() or None
-    cfg_userkey = (cfg.get("userkey") or "").strip() or None
-    cfg_tkey = (cfg.get("tkey") or "").strip() or None
+    cfg_login_at = cfg.get("login_at") or None
+    cfg_userkey = cfg.get("userkey") or None
+    if is_placeholder_userkey(cfg_userkey):
+        cfg_userkey = None
+    cfg_tkey = cfg.get("tkey") or None
 
     email = options.email or os.getenv("NOVELPIA_EMAIL")
     password = options.password or os.getenv("NOVELPIA_PASSWORD")
@@ -108,29 +162,24 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
         )
         if cookie_text:
             jar = load_netscape_cookies_text(cookie_text)
-        else:
+        elif cookie_file:
             cookie_path = os.path.expanduser(cookie_file)
             jar = load_netscape_cookies(cookie_path)
+        else:
+            raise RuntimeError("cookie_text or cookie_file required")
         client.s.cookies.update(jar)
-        userkey_val = get_cookie_value(client.s.cookies, "USERKEY")
-        tkey_val = get_cookie_value(client.s.cookies, "TKEY")
-        login_at_val = (
-            get_cookie_value(client.s.cookies, "LOGINAT")
-            or get_cookie_value(client.s.cookies, "login_at")
-            or os.getenv("NOVELPIA_LOGIN_AT")
-            or cfg_login_at
-        )
-        client.tokens.userkey = userkey_val
-        client.tokens.tkey = tkey_val
-        client.tokens.login_at = login_at_val
-        if not userkey_val:
+        auth = cookie_auth_from_jar(client.s.cookies, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
+        client.tokens.userkey = auth.userkey
+        client.tokens.tkey = auth.tkey
+        client.tokens.login_at = auth.login_at
+        if not auth.userkey:
             raise RuntimeError(
                 "Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again."
             )
         save_config({
-            "login_at": login_at_val or "",
-            "userkey": userkey_val,
-            "tkey": tkey_val or "",
+            "login_at": auth.login_at or "",
+            "userkey": auth.userkey,
+            "tkey": auth.tkey or "",
         })
         return client
 
@@ -144,20 +193,12 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
             tkey=cfg_tkey,
         )
         client.login()
-        userkey_val = None
-        tkey_val = None
-        try:
-            for c in client.s.cookies:
-                if c.name == "USERKEY":
-                    userkey_val = c.value
-                elif c.name == "TKEY":
-                    tkey_val = c.value
-        except Exception as e:
-            print(f"Error occurred while fetching cookies: {e}")
+        auth = cookie_auth_from_jar(client.s.cookies)
+        login_userkey = None if is_placeholder_userkey(auth.userkey) else auth.userkey
         save_config({
             "login_at": client.tokens.login_at,
-            "userkey": userkey_val or cfg_userkey or "",
-            "tkey": tkey_val or client.tokens.tkey or cfg_tkey or "",
+            "userkey": login_userkey or client.tokens.userkey or cfg_userkey,
+            "tkey": auth.tkey or client.tokens.tkey or cfg_tkey,
         })
         return client
 
@@ -176,7 +217,7 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
     raise RuntimeError("No credentials or stored tokens found. Provide email/password to login once.")
 
 
-def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = print) -> dict:
+def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = print) -> QueueResult:
     novel_ids, skipped_ids = dedupe_novel_ids(novel_ids)
     if not novel_ids:
         raise ValueError("provide at least one novel_id")
@@ -184,7 +225,7 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
         log("[info] Skipping duplicate novel IDs: " + ", ".join(str(novel_id) for novel_id in skipped_ids))
 
     client = create_client(options)
-    summary_rows: list[dict] = []
+    summary_rows: list[QueueSummaryRow] = []
     failures: list[tuple[int, str]] = []
     total = len(novel_ids)
     max_chapters = options.max_chapters if options.max_chapters and options.max_chapters > 0 else None
@@ -275,7 +316,7 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
     return {"rows": summary_rows, "failures": failures, "skipped_ids": skipped_ids}
 
 
-def print_queue_summary(rows: list[dict]) -> None:
+def print_queue_summary(rows: list[QueueSummaryRow]) -> None:
     if not rows:
         return
 

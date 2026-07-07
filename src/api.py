@@ -1,19 +1,66 @@
 import concurrent.futures
-import json
-import os
 import random
 import re as _re
+import secrets
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final, Protocol
 
 import requests
 
 from src import const
-from src.contracts import ChapterResult, EpisodeContentResponse, EpisodeItem, EpisodeListResponse, NovelResponse
-from src.helper import attach_auth_cookies, extract_t_token, j, mask_kv, merge_login_at
+from src.contracts import (
+    ChapterResult,
+    EpisodeContentData,
+    EpisodeContentResponse,
+    EpisodeContentResult,
+    EpisodeItem,
+    EpisodeListResponse,
+    EpisodeListResult,
+    NovelInfo,
+    NovelMeta,
+    NovelResponse,
+    NovelResult,
+    Writer,
+)
+from src.helper import (
+    attach_auth_cookies,
+    extract_t_token,
+    is_placeholder_userkey,
+    j,
+    load_config,
+    mask_kv,
+    merge_login_at,
+    save_config,
+)
 from src.novel import html_from_episode_text
+
+JsonScalar = str | int | float | bool | None
+JsonObject = Mapping[str, JsonScalar | list[JsonScalar] | Mapping[str, JsonScalar]]
+
+class ResponseLike(Protocol):
+    status_code: int
+    reason: str
+    url: str
+    text: str
+
+    def json(self) -> Any: ...
+    def raise_for_status(self) -> None: ...
+
+class RequestSession(Protocol):
+    def request(
+        self,
+        method: Any,
+        url: Any,
+        *,
+        headers: Any = None,
+        params: Any = None,
+        json: Any = None,
+        data: Any = None,
+        timeout: Any = 30,
+    ) -> Any: ...
 
 # ----------------------------
 # API Client
@@ -26,8 +73,150 @@ class Tokens:
     userkey: str | None = None
 
 
-RETRY_WAIT_SECONDS = 1.0
+@dataclass(frozen=True, slots=True)
+class ApiShapeError(Exception):
+    label: str
+    path: str
+    expected: str = "present"
 
+    def __str__(self) -> str:
+        if self.expected == "present":
+            return f"{self.label} missing {self.path}"
+        return f"{self.label} expected {self.expected} at {self.path}"
+
+RETRY_WAIT_SECONDS = 1.0
+AD_REWARD_WAIT_SECONDS: Final = 5.0
+AD_REWARD_JITTER_SECONDS: Final = (0.1, 0.5)
+
+@dataclass(frozen=True, slots=True)
+class AdRewardRequired:
+    novel_no: int
+    episode_no: int
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    return None
+
+def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | None:
+    if body.get("code") != "0008" and body.get("errmsg") != "novel.ADVERTISEMENT_EPISODE":
+        return None
+    result = body.get("result")
+    if not isinstance(result, dict):
+        return None
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return None
+    episode_data = data.get("data")
+    if not isinstance(episode_data, dict):
+        return None
+    novel_no = _int_or_none(data.get("novel_no") or episode_data.get("novel_no"))
+    episode_no = _int_or_none(episode_data.get("episode_no"))
+    if novel_no is None or episode_no is None:
+        return None
+    return AdRewardRequired(novel_no=novel_no, episode_no=episode_no)
+
+
+def _response_json_object(response: ResponseLike, label: str) -> dict[str, Any]:
+    raw = response.json()
+    if not isinstance(raw, dict):
+        raise ApiShapeError(label, "$", "object")
+    return raw
+
+def _required_object(data: Mapping[str, Any], key: str, path: str, label: str) -> dict[str, Any]:
+    value = data.get(key)
+    if key not in data:
+        raise ApiShapeError(label, path)
+    if not isinstance(value, dict):
+        raise ApiShapeError(label, path, "object")
+    return value
+
+def _required_list(data: Mapping[str, Any], key: str, path: str, label: str) -> list[Any]:
+    value = data.get(key)
+    if key not in data:
+        raise ApiShapeError(label, path)
+    if not isinstance(value, list):
+        raise ApiShapeError(label, path, "list")
+    return value
+
+def _parse_novel_response(response: ResponseLike) -> NovelResponse:
+    body = _response_json_object(response, "novel response")
+    result = _required_object(body, "result", "$.result", "novel response")
+    novel_body = _required_object(result, "novel", "$.result.novel", "novel response")
+    novel: NovelMeta = {}
+    for key in ("novel_no", "novel_name", "novel_full_img", "novel_img", "novel_story", "flag_complete", "count_epi"):
+        value = novel_body.get(key)
+        if value is not None:
+            novel[key] = value
+    tag_list = novel_body.get("tag_list")
+    if isinstance(tag_list, list):
+        novel["tag_list"] = tag_list
+
+    typed_result: NovelResult = {"novel": novel}
+    writer_list = result.get("writer_list")
+    if isinstance(writer_list, list):
+        writers: list[Writer] = []
+        for row in writer_list:
+            if isinstance(row, dict):
+                writer: Writer = {}
+                writer_name = row.get("writer_name")
+                if isinstance(writer_name, str):
+                    writer["writer_name"] = writer_name
+                writers.append(writer)
+        typed_result["writer_list"] = writers
+    info_body = result.get("info")
+    if isinstance(info_body, dict):
+        info: NovelInfo = {}
+        epi_cnt = info_body.get("epi_cnt")
+        if epi_cnt is not None:
+            info["epi_cnt"] = epi_cnt
+        typed_result["info"] = info
+    result_tag_list = result.get("tag_list")
+    if isinstance(result_tag_list, list):
+        typed_result["tag_list"] = result_tag_list
+    return {"result": typed_result}
+
+def _parse_episode_list_response(response: ResponseLike) -> EpisodeListResponse:
+    body = _response_json_object(response, "episode list response")
+    result = _required_object(body, "result", "$.result", "episode list response")
+    rows = _required_list(result, "list", "$.result.list", "episode list response")
+    episodes: list[EpisodeItem] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ApiShapeError("episode list response", f"$.result.list[{index}]", "object")
+        episode: EpisodeItem = {}
+        for key in ("episode_no", "epi_num", "epi_title"):
+            value = row.get(key)
+            if value is not None:
+                episode[key] = value
+        episodes.append(episode)
+    typed_result: EpisodeListResult = {"list": episodes}
+    return {"result": typed_result}
+
+def _parse_episode_content_response(response: ResponseLike) -> EpisodeContentResponse:
+    body = _response_json_object(response, "episode content response")
+    result = _required_object(body, "result", "$.result", "episode content response")
+    data = result.get("data")
+    typed_result: EpisodeContentResult = {}
+    if data is not None:
+        if not isinstance(data, dict):
+            raise ApiShapeError("episode content response", "$.result.data", "object")
+        content_data: EpisodeContentData = {}
+        for key, value in data.items():
+            if str(key).startswith("epi_content") and isinstance(value, str):
+                content_data[str(key)] = value
+        typed_result["data"] = content_data
+    for key in ("content", "html", "text"):
+        value = result.get(key)
+        if isinstance(value, str):
+            typed_result[key] = value
+    response_body: EpisodeContentResponse = {"result": typed_result}
+    content = body.get("content")
+    if isinstance(content, str):
+        response_body["content"] = content
+    return response_body
 
 class NovelpiaClient:
     def __init__(self, email: str | None = None, password: str | None = None,
@@ -71,7 +260,7 @@ class NovelpiaClient:
             for c in self.s.cookies:
                 if c.name == "TKEY":
                     self.tokens.tkey = c.value
-                elif c.name == "USERKEY":
+                elif c.name == "USERKEY" and not is_placeholder_userkey(c.value):
                     self.tokens.userkey = c.value
         except Exception as e:
             print(f"Error occurred while reading login cookies: {e}")
@@ -85,23 +274,13 @@ class NovelpiaClient:
         )
         r.raise_for_status()
         self.tokens.login_at = r.json()["result"]["LOGINAT"]
-        # Persist refreshed token to config
-        try:
-            cfg: dict[str, Any] = {}
-            if os.path.exists(const.CONFIG_PATH):
-                try:
-                    with open(const.CONFIG_PATH, encoding="utf-8") as f:
-                        cfg = json.load(f) or {}
-                except Exception as e:
-                    print(f"Error loading config: {e}")
-                    cfg = {}
-            cfg["login_at"] = self.tokens.login_at
-            with open(const.CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-                pass
-        except Exception as e:
-            print(f"Error saving config: {e}")
-            pass
+        cfg = load_config()
+        cfg["login_at"] = self.tokens.login_at or ""
+        save_config({
+            "login_at": cfg.get("login_at"),
+            "userkey": cfg.get("userkey"),
+            "tkey": cfg.get("tkey"),
+        })
         return self.tokens.login_at
 
     def me(self) -> dict[str, Any]:
@@ -125,7 +304,7 @@ class NovelpiaClient:
             refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
-        return r.json()
+        return _parse_novel_response(r)
 
     def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse:
         url = f"{const.API_BASE}/v1/novel/episode/list"
@@ -137,7 +316,7 @@ class NovelpiaClient:
             refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
-        return r.json()
+        return _parse_episode_list_response(r)
 
     def episode_ticket(self, episode_no: int) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/novel/episode"
@@ -156,6 +335,51 @@ class NovelpiaClient:
         r.raise_for_status()
         return r.json()
 
+    def ad_reward_token(self, reward: AdRewardRequired) -> str:
+        url = f"{const.API_BASE}/v1/ad/reward/token"
+        r = request_with_retries(
+            self.s, "GET", url,
+            headers=merge_login_at({}, self.tokens.login_at),
+            params={"novel_no": reward.novel_no, "episode_no": reward.episode_no},
+            timeout=self.timeout, allow_refresh=True,
+            refresh_fn=self.refresh, login_fn=self.login,
+            max_retries=3,
+        )
+        r.raise_for_status()
+        body = _response_json_object(r, "ad reward token response")
+        result = _required_object(body, "result", "$.result", "ad reward token response")
+        token = result.get("token")
+        if not isinstance(token, str) or not token:
+            raise ApiShapeError("ad reward token response", "$.result.token", "non-empty string")
+        return token
+
+    def grant_ad_reward(self, reward: AdRewardRequired, token: str) -> dict[str, Any]:
+        url = f"{const.API_BASE}/v1/ad/reward/grant"
+        r = request_with_retries(
+            self.s, "POST", url,
+            headers=merge_login_at({}, self.tokens.login_at),
+            json={
+                "novel_no": reward.novel_no,
+                "episode_no": reward.episode_no,
+                "flag_success": 1,
+                "token": token,
+            },
+            timeout=self.timeout, allow_refresh=True,
+            refresh_fn=self.refresh, login_fn=self.login,
+            max_retries=3,
+        )
+        r.raise_for_status()
+        return _response_json_object(r, "ad reward grant response")
+
+    def probe_ad_reward_unlock(
+        self, reward: AdRewardRequired, wait_seconds: float = AD_REWARD_WAIT_SECONDS
+    ) -> dict[str, Any]:
+        token = self.ad_reward_token(reward)
+        jitter = secrets.SystemRandom().uniform(*AD_REWARD_JITTER_SECONDS)
+        time.sleep(wait_seconds + jitter)
+        self.grant_ad_reward(reward, token)
+        return self.episode_ticket(reward.episode_no)
+
     def episode_content(self, token_t: str) -> EpisodeContentResponse:
         url = f"{const.API_BASE}/v1/novel/episode/content"
         r = request_with_retries(
@@ -165,7 +389,7 @@ class NovelpiaClient:
             allow_refresh=True, refresh_fn=self.refresh, login_fn=self.login
         )
         r.raise_for_status()
-        return r.json()
+        return _parse_episode_content_response(r)
 
     def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
         """Fetch ticket and content for a single episode."""
@@ -266,11 +490,21 @@ class NovelpiaClient:
                     progress_cb()
         return results
 
-def request_with_retries(session: requests.Session, method: str, url: str, *,
-                          headers=None, params=None, json=None, data=None,
-                          timeout=30, max_retries=3,
-                          allow_refresh=False, refresh_fn=None,
-                          login_fn=None):
+def request_with_retries(
+    session: RequestSession,
+    method: str,
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    params: JsonObject | None = None,
+    json: JsonObject | None = None,
+    data: JsonObject | None = None,
+    timeout: int = 30,
+    max_retries: int = 3,
+    allow_refresh: bool = False,
+    refresh_fn: Callable[[], str | None] | None = None,
+    login_fn: Callable[[], None] | None = None,
+) -> Any:
     attempt = 0
     last_exc = None
     did_refresh = False

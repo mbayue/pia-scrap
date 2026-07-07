@@ -48,8 +48,7 @@ class EpisodeListResponse(TypedDict):
     result: EpisodeListResult
 
 
-class EpisodeContentData(TypedDict, total=False):
-    epi_content: str
+EpisodeContentData = dict[str, str]
 
 
 class EpisodeContentResult(TypedDict, total=False):
@@ -78,3 +77,15 @@ class FailedChapter(TypedDict, total=False):
     title: str
     url: str
     error: str
+
+class QueueSummaryRow(TypedDict):
+    novel_id: int
+    status: str
+    chapters: int | None
+    title: str
+    path: str | None
+
+class QueueResult(TypedDict):
+    rows: list[QueueSummaryRow]
+    failures: list[tuple[int, str]]
+    skipped_ids: list[int]
