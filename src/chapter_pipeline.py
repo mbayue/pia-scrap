@@ -14,6 +14,16 @@ def assert_never(value: object) -> None:
     raise AssertionError(f"unreachable value: {value!r}")
 
 
+def episode_no(ep: EpisodeItem) -> int | None:
+    raw_episode_no = ep.get("episode_no")
+    if raw_episode_no is None:
+        return None
+    try:
+        return int(raw_episode_no)
+    except (TypeError, ValueError):
+        return None
+
+
 class AccountChapterPolicy(str, Enum):
     PAID = "paid"
     FREE = "free"
@@ -56,10 +66,14 @@ def select_episodes(episodes: list[EpisodeItem], selection: ChapterSelection) ->
 
 def plan_fetch(book_dir: str, episodes: list[EpisodeItem], mode: ChapterFetchMode) -> ChapterFetchPlan:
     retry_episode_nos: set[int] = load_failed_episode_nos(book_dir) if mode.retry_failed else set()
+    planned_episodes = episodes
     if mode.retry_failed and not retry_episode_nos:
         print("[info] no failed chapters to retry")
+        planned_episodes = []
+    elif mode.retry_failed:
+        planned_episodes = [ep for ep in episodes if episode_no(ep) in retry_episode_nos]
     return ChapterFetchPlan(
-        episodes=episodes,
+        episodes=planned_episodes,
         retry_episode_nos=retry_episode_nos,
         use_cache=mode.update or mode.retry_failed,
         max_workers=max(1, int(mode.max_workers or 1)),

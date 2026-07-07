@@ -203,6 +203,8 @@ def _cli_args(**overrides):
         "txt": False,
         "email": None,
         "password": None,
+        "cookie_file": None,
+        "cookie_text": None,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -230,6 +232,20 @@ class AuthClient:
 def as_auth_client(client: object) -> AuthClient:
     assert isinstance(client, AuthClient)
     return client
+
+
+def test_build_queue_request_carries_cookie_auth_options():
+    request = build_queue_request(
+        _cli_args(
+            novel_ids=[49],
+            cookie_file="cookies.txt",
+            cookie_text="USERKEY=abc",
+        )
+    )
+
+    assert request.options.cookie_file == "cookies.txt"
+    assert request.options.cookie_text == "USERKEY=abc"
+
 
 def test_create_client_prefers_cookie_text_over_email_and_config(monkeypatch):
     saved = []

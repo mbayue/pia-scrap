@@ -11,6 +11,7 @@ from src.contracts import ChapterResult, EpisodeItem, FailedChapter
 from src.helper import ensure_dir
 
 BLOCK_RE = re.compile(r"^(ad reward required|premium episode blocked): novel_no=(\d+) episode_no=(\d+)$")
+TOKEN_RE = re.compile(r"([?&]_t=)[^&\s]+")
 
 
 class ChapterFetchClient(Protocol):
@@ -113,8 +114,12 @@ def load_cache(book_dir: str) -> dict[int, ChapterResult]:
                 continue
             html_text = row.get("html")
             if isinstance(html_text, str) and html_text:
+                try:
+                    idx = int(row.get("idx") or 0)
+                except (TypeError, ValueError):
+                    idx = 0
                 cache[epi_no] = {
-                    "idx": int(row.get("idx") or 0),
+                    "idx": idx,
                     "epi_no": epi_no,
                     "epi_title": str(row.get("epi_title") or ""),
                     "html": html_text,
@@ -132,9 +137,14 @@ def load_failed_episode_nos(book_dir: str) -> set[int]:
 
 
 def write_jsonl(path: str, rows: Iterable[FailedChapter]) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        ensure_dir(parent)
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            safe_row = dict(row)
+            safe_row["error"] = TOKEN_RE.sub(r"\1<redacted>", str(safe_row.get("error") or ""))
+            f.write(json.dumps(safe_row, ensure_ascii=False) + "\n")
 
 
 def write_cache_item(book_dir: str, row: ChapterResult) -> None:
@@ -154,7 +164,7 @@ def normalize_failed_chapter(ep: EpisodeItem, res: ChapterResult, pos: int) -> F
         "epi_no": epi_no,
         "title": chapter_title(ep),
         "url": f"https://global.novelpia.com/viewer/{epi_no}" if epi_no else "",
-        "error": res.get("error", "Unknown error"),
+        "error": TOKEN_RE.sub(r"\1<redacted>", str(res.get("error", "Unknown error"))),
     }
 
 

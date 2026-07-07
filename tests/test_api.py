@@ -61,7 +61,7 @@ class RecordingSession(FakeSession):
         self.requests = []
 
     def request(self, method, url, *, headers=None, params=None, json=None, data=None, timeout=30):
-        self.requests.append({"method": method, "url": url, "params": params, "json": json})
+        self.requests.append({"method": method, "url": url, "headers": headers, "params": params, "json": json})
         return super().request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
 
 def test_request_with_retries_retries_http_500_then_returns_success(monkeypatch, capsys):
@@ -140,6 +140,40 @@ def test_request_with_retries_refreshes_then_retries_expired_token(monkeypatch):
     assert response.status_code == 200
     assert session.calls == 2
     assert refreshed == [True]
+
+def test_request_with_retries_rebuilds_auth_headers_after_refresh(monkeypatch):
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    session = RecordingSession([
+        FakeResponse(401, {"errmsg": "token expire"}),
+        FakeResponse(200, {"result": "ok"}),
+    ])
+    session.cookies = [
+        FakeCookie("USERKEY", "old-user"),
+        FakeCookie("TKEY", "old-token"),
+    ]
+
+    def refresh():
+        session.cookies = [
+            FakeCookie("USERKEY", "new-user"),
+            FakeCookie("TKEY", "new-token"),
+        ]
+        return "fresh-login"
+
+    response = request_with_retries(
+        session,
+        "GET",
+        "https://api-global.novelpia.com/test",
+        headers={"login-at": "stale-login"},
+        allow_refresh=True,
+        refresh_fn=refresh,
+        max_retries=3,
+    )
+
+    assert response.status_code == 200
+    assert session.requests[0]["headers"]["login-at"] == "stale-login"
+    assert session.requests[0]["headers"]["Cookie"] == "USERKEY=old-user; TKEY=old-token; last_login=basic"
+    assert session.requests[1]["headers"]["login-at"] == "fresh-login"
+    assert session.requests[1]["headers"]["Cookie"] == "USERKEY=new-user; TKEY=new-token; last_login=basic"
 
 def test_request_with_retries_logs_in_when_refresh_fails(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
@@ -253,6 +287,28 @@ def test_episode_content_reports_bad_consumed_shape():
         assert str(exc) == "episode content response expected object at $.result.data"
     else:
         raise AssertionError("expected ApiShapeError")
+
+def test_episode_content_enables_auth_recovery(monkeypatch):
+    captured = {}
+
+    def fake_request_with_retries(session, method, url, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}})
+
+    client = NovelpiaClient(throttle=0)
+    client.tokens.tkey = "auth-token"
+    monkeypatch.setattr("src.api.request_with_retries", fake_request_with_retries)
+
+    response = client.episode_content("token")
+
+    result = response.get("result")
+    assert result is not None
+    data = result.get("data")
+    assert data is not None
+    assert data["epi_content"] == "<p>ok</p>"
+    assert captured["allow_refresh"] is True
+    assert captured["refresh_fn"] == client.refresh
+    assert captured["login_fn"] == client.login
 
 
 def test_detect_ad_reward_required_from_failure_shape():

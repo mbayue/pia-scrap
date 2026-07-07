@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+from src.web_jobs import UnsafeDownloadPathError, downloadable_path
 from web_app import (
     MAX_STORED_JOBS,
     JobRequest,
@@ -79,6 +80,21 @@ def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
         jobs.clear()
 
 
+def test_create_job_creates_new_job_for_partial_batch_overlap(monkeypatch):
+    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    with jobs_lock:
+        jobs.clear()
+
+    first = create_job(JobRequest(novel_text="5522"))
+    second = create_job(JobRequest(novel_text="5522\n2937"))
+
+    assert second != first
+    with jobs_lock:
+        assert len(jobs) == 2
+        assert jobs[second["job_id"]].get("novel_ids") == [5522, 2937]
+        jobs.clear()
+
+
 def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch):
     monkeypatch.setattr("web_app.threading.Thread", DummyThread)
     with jobs_lock:
@@ -147,6 +163,40 @@ def test_download_rejects_file_outside_project(monkeypatch, tmp_path):
         raise AssertionError("expected HTTPException")
     with jobs_lock:
         jobs.clear()
+
+
+def test_downloadable_path_rejects_symlink_escape(monkeypatch, tmp_path):
+    base = tmp_path / "project"
+    base.mkdir()
+    symlink_path = base / "link.epub"
+    outside_real = tmp_path / "outside.epub"
+    outside_real.write_text("epub", encoding="utf-8")
+
+    monkeypatch.setattr("src.web_jobs.os.path.isfile", lambda _path: True)
+    monkeypatch.setattr(
+        "src.web_jobs.os.path.realpath",
+        lambda path: str(outside_real) if str(path) == str(symlink_path) else str(base),
+    )
+    with jobs_lock:
+        jobs.clear()
+        jobs["job"] = job_state("done", "2000-01-01T00:00:00")
+        jobs["job"]["rows"] = [{
+            "novel_id": 49,
+            "status": "epub",
+            "chapters": 1,
+            "title": "Book",
+            "path": str(symlink_path),
+        }]
+
+    try:
+        downloadable_path("job", 0, project_root=str(base))
+    except UnsafeDownloadPathError:
+        pass
+    else:
+        raise AssertionError("expected UnsafeDownloadPathError")
+    with jobs_lock:
+        jobs.clear()
+
 
 def test_download_rejects_unknown_row():
     with jobs_lock:

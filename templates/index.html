@@ -688,6 +688,9 @@ async function poll(jobId) {
 
 function validatePayload(payload) {
   if (!payload.novel_text.trim()) return "Paste at least one novel ID or Novelpia URL.";
+  if (payload.start_chapter !== null && payload.start_chapter < 1) return "Start chapter must be 1 or greater.";
+  if (payload.end_chapter !== null && payload.end_chapter < 1) return "End chapter must be 1 or greater.";
+  if (payload.max_chapters !== null && payload.max_chapters < 0) return "Max chapters cannot be negative.";
   if (payload.start_chapter !== null && payload.end_chapter !== null && payload.start_chapter > payload.end_chapter) {
     return "Start chapter cannot be greater than end chapter.";
   }

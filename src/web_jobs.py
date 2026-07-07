@@ -147,10 +147,10 @@ def create_job(novel_text: str, options: QueueOptions, thread_factory: type[thre
         raise JobInputError("Enter at least one novel ID or Novelpia novel URL.")
 
     job_id = uuid.uuid4().hex
-    requested_ids = set(novel_ids)
+    requested_ids = tuple(novel_ids)
     with jobs_lock:
         for existing_id, job in jobs.items():
-            if job.get("status") in ACTIVE_JOB_STATUSES and requested_ids.intersection(job.get("novel_ids", [])):
+            if job.get("status") in ACTIVE_JOB_STATUSES and tuple(job.get("novel_ids", [])) == requested_ids:
                 return existing_id
         jobs[job_id] = {
             "id": job_id,
@@ -191,8 +191,8 @@ def downloadable_path(job_id: str, row_index: int, project_root: str | None = No
     if not path or not os.path.isfile(path):
         raise DownloadUnavailableError
 
-    base = os.path.abspath(project_root or os.getcwd())
-    resolved = os.path.abspath(path)
+    base = os.path.realpath(project_root or os.getcwd())
+    resolved = os.path.realpath(path)
     if os.path.commonpath([base, resolved]) != base:
         raise UnsafeDownloadPathError
     return resolved

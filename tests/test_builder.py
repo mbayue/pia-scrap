@@ -38,6 +38,26 @@ class DummyClient:
         self.calls.append(([{"episode_no": reward.episode_no, "reward": True}], 1))
         return {"ticket": str(reward.episode_no)}
 
+
+class FailingFetchClient(DummyClient):
+    def fetch_episodes_parallel(
+        self,
+        ep_list: list[EpisodeItem],
+        max_workers: int = 1,
+        progress_cb=None,
+    ) -> list[ChapterResult]:
+        self.calls.append((ep_list, max_workers))
+        return [
+            {
+                "idx": 1,
+                "epi_no": 42,
+                "epi_title": "Bad",
+                "html": "",
+                "error": "403 Client Error: ?_t=secret-token&x=1",
+            }
+        ]
+
+
 class BuilderClient(DummyClient):
     def __init__(self, me_response: dict[str, object], fetched: list[ChapterResult]):
         super().__init__(fetched)
@@ -180,6 +200,20 @@ def test_load_cache_skips_malformed_cache_rows(tmp_path):
     assert cache == {41: {"idx": 4, "epi_no": 41, "epi_title": "OK", "html": "ok"}}
 
 
+def test_load_cache_defaults_bad_idx_without_dropping_row(tmp_path):
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "ok.json").write_text(
+        json.dumps({"idx": "bad", "epi_no": 41, "html": "ok", "epi_title": "OK"}),
+        encoding="utf-8",
+    )
+
+    cache = load_cache(str(book_dir))
+
+    assert cache == {41: {"idx": 0, "epi_no": 41, "epi_title": "OK", "html": "ok"}}
+
+
 def test_load_failed_episode_nos_skips_malformed_jsonl(tmp_path):
     book_dir = tmp_path / "book"
     book_dir.mkdir()
@@ -201,6 +235,18 @@ def test_load_failed_episode_nos_skips_bad_epi_no(tmp_path):
     )
 
     assert load_failed_episode_nos(str(book_dir)) == {51}
+
+
+def test_fetch_with_cache_redacts_failed_chapter_tokens(tmp_path):
+    book_dir = tmp_path / "book"
+    client = FailingFetchClient([])
+    episodes: list[EpisodeItem] = [{"episode_no": 42, "epi_num": 1, "epi_title": "Bad"}]
+
+    fetch_with_cache(client, episodes, str(book_dir), use_cache=False)
+
+    failed = (book_dir / "failed_chapters.jsonl").read_text(encoding="utf-8")
+    assert "secret-token" not in failed
+    assert "_t=<redacted>" in failed
 
 
 def test_select_episodes_applies_start_end_then_max():
@@ -250,6 +296,53 @@ def test_fetch_chapters_retry_failed_refetches_only_failed_cache_row(tmp_path):
     assert fetched_count == 1
     assert results[0].get("html") == "retried"
     assert client.calls == [(episodes, 1, None)]
+
+
+def test_fetch_chapters_retry_failed_with_empty_failed_list_fetches_nothing(tmp_path):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "failed_chapters.jsonl").write_text("", encoding="utf-8")
+    client = DummyClient([{"epi_no": 20, "html": "unexpected", "epi_title": "Unexpected"}])
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 21, "epi_num": 2, "epi_title": "Two"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(retry_failed=True, max_workers=1, account_policy=AccountChapterPolicy.PAID),
+    )
+
+    assert results == []
+    assert fetched_count == 0
+    assert client.calls == []
+
+
+def test_fetch_chapters_retry_failed_filters_non_failed_episodes(tmp_path):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "failed_chapters.jsonl").write_text(
+        json.dumps({"idx": 2, "epi_no": 21, "title": "Two", "url": "", "error": "old"}) + "\n",
+        encoding="utf-8",
+    )
+    client = DummyClient([{"epi_no": 21, "html": "retried", "epi_title": "Two"}])
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 21, "epi_num": 2, "epi_title": "Two"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(retry_failed=True, max_workers=1, account_policy=AccountChapterPolicy.PAID),
+    )
+
+    assert fetched_count == 1
+    assert [row.get("epi_no") for row in results] == [21]
+    assert client.calls == [([episodes[1]], 1)]
 
 
 def test_fetch_chapters_update_no_op_when_all_requested_chapters_are_cached(tmp_path):

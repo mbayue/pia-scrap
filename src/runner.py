@@ -108,6 +108,8 @@ def build_queue_request(args: argparse.Namespace) -> QueueRequest:
             txt=args.txt,
             email=args.email,
             password=args.password,
+            cookie_file=getattr(args, "cookie_file", None),
+            cookie_text=getattr(args, "cookie_text", None),
         ),
         show_summary=len(novel_ids) > 1 or bool(args.queue),
     )

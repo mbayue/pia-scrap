@@ -1,3 +1,5 @@
+import requests
+
 from src.api import NovelpiaClient
 from src.contracts import NovelResponse
 from src.epub import EpubBuilder
@@ -7,9 +9,22 @@ from src.export import EpubImageAdapter, ImageFetcher, write_txt_chapters
 class OkResponse:
     status_code = 200
     content = b"image-bytes"
+    headers = {}
 
     def raise_for_status(self):
         return None
+
+
+class ErrorResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.content = b""
+        self.headers = {}
+
+    def raise_for_status(self):
+        response = requests.Response()
+        response.status_code = self.status_code
+        raise requests.HTTPError("blocked", response=response)
 
 
 def _failing_client(monkeypatch):
@@ -152,6 +167,30 @@ def test_epub_image_adapter_preserves_external_image_when_fetch_fails(monkeypatc
     rewritten, items = adapter.add_images_and_rewrite('<p><img src="https://example.com/missing.jpg"></p>')
 
     assert 'src="https://example.com/missing.jpg"' in rewritten
+    assert items == []
+
+
+def test_fetch_bytes_does_not_retry_permanent_4xx(monkeypatch, capsys):
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: (_ for _ in ()).throw(AssertionError("no retry")))
+    client = NovelpiaClient(throttle=0)
+    calls = []
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: calls.append(True) or ErrorResponse(403))
+
+    result = ImageFetcher(debug_dump=True).fetch_bytes(client, "https://example.com/missing.jpg")
+
+    assert result is None
+    assert calls == [True]
+    assert "image fetch failed" in capsys.readouterr().out
+
+
+def test_epub_image_adapter_skips_unsupported_image_extension(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
+    adapter = EpubImageAdapter(ImageFetcher(), client)
+
+    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/file.bin"></p>')
+
+    assert 'src="/file.bin"' in rewritten
     assert items == []
 
 

@@ -293,7 +293,7 @@ class NovelpiaClient:
     def close(self):
         self.s.close()
 
-    def login(self):
+    def login(self) -> str | None:
         url = f"{const.API_BASE}/v1/member/login"
         r = request_with_retries(
             self.s, "POST", url,
@@ -312,6 +312,7 @@ class NovelpiaClient:
                     self.tokens.userkey = c.value
         except Exception as e:
             print(f"Error occurred while reading login cookies: {e}")
+        return self.tokens.login_at
 
     def refresh(self) -> str | None:
         url = f"{const.API_BASE}/v1/login/refresh"
@@ -431,11 +432,13 @@ class NovelpiaClient:
 
     def episode_content(self, token_t: str) -> EpisodeContentResponse:
         url = f"{const.API_BASE}/v1/novel/episode/content"
+        can_recover_auth = bool(self.tokens.login_at or self.tokens.tkey)
         for attempt in range(1, 4):
             r = request_with_retries(
                 self.s, "GET", url,
                 params={"_t": token_t},
-                timeout=self.timeout, max_retries=3,
+                timeout=self.timeout, max_retries=3, allow_refresh=can_recover_auth,
+                refresh_fn=self.refresh, login_fn=self.login,
             )
             if r.status_code == 403 and attempt < 3:
                 print(f"[warn] content access returned 403; retrying in {RETRY_WAIT_SECONDS:.0f}s ({attempt}/3)")
@@ -573,20 +576,22 @@ def request_with_retries(
     max_retries: int = 3,
     allow_refresh: bool = False,
     refresh_fn: Callable[[], str | None] | None = None,
-    login_fn: Callable[[], None] | None = None,
+    login_fn: Callable[[], str | None] | None = None,
     known_block_fn: Callable[[Mapping[str, Any]], KnownApiBlock | None] | None = None,
 ) -> Any:
     attempt = 0
     last_exc = None
     did_refresh = False
     did_login = False
+    base_headers = headers
     while attempt < max_retries:
         attempt += 1
         try:
             # Inject Cookie header (except for login endpoint) using session cookies
+            request_headers = base_headers
             try:
                 if "/v1/member/login" not in url:
-                    headers = attach_auth_cookies(session, headers)
+                    request_headers = attach_auth_cookies(session, base_headers)
             except Exception as e:
                 print(f"Error occurred while attaching auth cookies: {e}")
                 pass
@@ -600,8 +605,8 @@ def request_with_retries(
                     except Exception as e:
                         print(f"Error occurred while fetching session headers: {e}")
                         pass
-                    if headers:
-                        eff_headers.update(headers)
+                    if request_headers:
+                        eff_headers.update(request_headers)
                 except Exception as e:
                     print(f"[api]   req-headers: <unavailable> ({e})")
                 if params:
@@ -609,7 +614,9 @@ def request_with_retries(
                 if json is not None:
                     print(f"[api]   json:    {j(mask_kv(json))}")
 
-            r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
+            r = session.request(
+                method, url, headers=request_headers, params=params, json=json, data=data, timeout=timeout
+            )
 
             if r.status_code >= 500:
                 if const.HTTP_LOG:
@@ -659,12 +666,13 @@ def request_with_retries(
                 if trigger_refresh:
                     try:
                         success = False
+                        recovered_login_at = None
                         # Try refresh first
                         if refresh_fn and not did_refresh:
                             if const.HTTP_LOG:
                                 print("[api] Session expired, trying refresh...")
                             try:
-                                refresh_fn()
+                                recovered_login_at = refresh_fn()
                                 did_refresh = True
                                 success = True
                             except Exception:
@@ -676,7 +684,7 @@ def request_with_retries(
                             if const.HTTP_LOG:
                                 print("[api] Refresh failed or unavailable, trying full re-login...")
                             try:
-                                login_fn()
+                                recovered_login_at = login_fn()
                                 did_login = True
                                 success = True
                             except Exception as e:
@@ -685,8 +693,16 @@ def request_with_retries(
 
                         if success:
                             # Retry original request once
+                            retry_headers = base_headers
+                            if recovered_login_at:
+                                retry_headers = merge_login_at(base_headers or {}, recovered_login_at)
+                            try:
+                                if "/v1/member/login" not in url:
+                                    retry_headers = attach_auth_cookies(session, retry_headers)
+                            except Exception as e:
+                                print(f"Error occurred while attaching auth cookies: {e}")
                             r = session.request(
-                                method, url, headers=headers, params=params, json=json, data=data, timeout=timeout
+                                method, url, headers=retry_headers, params=params, json=json, data=data, timeout=timeout
                             )
                     except Exception as e:
                         if const.HTTP_LOG:

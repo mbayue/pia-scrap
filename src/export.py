@@ -11,6 +11,8 @@ from src.const import BASE_URL
 from src.contracts import ChapterResult
 from src.helper import media_type_from_ext, normalize_url, sanitize_filename
 
+SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+
 
 class ImageFetcher:
     def __init__(self, debug_dump: bool = False):
@@ -46,6 +48,16 @@ class ImageFetcher:
                     continue
                 resp.raise_for_status()
                 return resp.content
+            except requests.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response is not None else 0
+                if 400 <= status_code < 500:
+                    if self.debug_dump:
+                        print(f"[debug] image fetch failed: {url}: {exc}")
+                    return None
+                if self.debug_dump:
+                    print(f"[debug] image fetch failed: {url}: {exc}")
+                if attempt < 3:
+                    time.sleep(1.0)
             except (AttributeError, OSError, RuntimeError, requests.RequestException) as exc:
                 if self.debug_dump:
                     print(f"[debug] image fetch failed: {url}: {exc}")
@@ -83,8 +95,8 @@ class EpubImageAdapter:
                 continue
 
             ext = os.path.splitext(urlparse(src).path)[1].lower() or ".jpg"
-            if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-                ext = ".jpg"
+            if ext not in SUPPORTED_IMAGE_EXTENSIONS:
+                continue
 
             img_bytes = self.fetcher.fetch_bytes(self.client, src)
             if not img_bytes:
