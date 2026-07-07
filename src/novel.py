@@ -48,6 +48,25 @@ def html_from_episode_text(raw_html: str) -> str:
 
     return str(soup)
 
+def user_subscription_status(me_response: object) -> str:
+    if not isinstance(me_response, dict):
+        return "unknown"
+    result = me_response.get("result")
+    if not isinstance(result, dict):
+        return "unknown"
+    login = result.get("login")
+    if not isinstance(login, dict):
+        return "unknown"
+    subscription = result.get("subscription")
+    if subscription is not None:
+        return "paid"
+    plus_type = login.get("mem_plus_type")
+    if isinstance(plus_type, int):
+        return "paid" if plus_type != 0 else "free"
+    if isinstance(plus_type, str) and plus_type.isdecimal():
+        return "paid" if int(plus_type) != 0 else "free"
+    return "unknown"
+
 def fetch_novel_and_episodes(
     client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None
 ) -> tuple[NovelResponse, list[EpisodeItem], str]:
@@ -57,6 +76,7 @@ def fetch_novel_and_episodes(
         if str(res.get("statusCode")) == "200":
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
             print(f"[auth] Logged in as: {mem}")
+            print(f"[info] User staus: {user_subscription_status(res)}")
     except Exception as e:
         print(f"[warn] auth check failed: {e}")
 
