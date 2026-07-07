@@ -1,23 +1,35 @@
 # PIA SCRAP (API): Novelpia → EPUB
 
-Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or more `novel_id` values (e.g., `49`), the script fetches the novel data, episode list, pulls episode data, embeds images and cover, and writes a nicely structured EPUB with metadata.
+Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one or more `novel_id` values (for example, `49`), the script fetches novel metadata, episodes, chapter HTML, images, and cover data, then writes output with cache and retry metadata.
 
 > Use responsibly. Only download what your account can legitimately access. Respect Novelpia’s Terms and copyright.
+
+---
+
+## What's New in 2.4.0
+
+* Prints logged-in account status: `free`, `paid`, or `unknown`.
+* Handles free-account ad-gated chapters with one notice and a short wait.
+* Stops at premium-only chapters for free accounts, then writes the chapters already fetched.
+* Retries transient chapter-content `403` responses and redacts `_t` tokens in saved errors.
+* Adds genre metadata to the EPUB About page when tags are available.
+* Splits internals into typed auth, API, cache, pipeline, export, CLI, and web-job helpers.
 
 ---
 
 ## Features
 
 * API-based fetch (no browser automation).
-* **Parallel Fetching**: Uses `ThreadPoolExecutor` for high-performance concurrent chapter downloads.
+* **Parallel Fetching**: Uses `ThreadPoolExecutor` for concurrent chapter downloads.
 * **Configurable Workers**: Tune chapter fetch concurrency with `-w`.
 * **Incremental Updates**: Reuse per-chapter JSON files in `.cache/` with `-up` to fetch only missing/new chapters.
 * **Failed Chapter Retry**: Writes `failed_chapters.jsonl` and can refetch those chapters with `-r`.
+* **Free Account Flow**: Handles ad-gated chapters with a short access wait and stops at premium-only chapters.
 * **Progress Reporting**: Real-time visual feedback with `tqdm` progress bars.
 * **Flexible Chapter Selection**: Support for downloading specific chapter ranges (`-start`/`-end`).
 * **Environment Variable Support**: Securely store credentials in a `.env` file via `python-dotenv`.
-* **Advanced Automation**: Automatically handles rate limits (429) with smart backoff and session expiration (401) with auto re-login.
-* Proper EPUB with cover, About page, per‑chapter files, ToC, NCX/Nav.
+* **Session Recovery**: Retries server errors and refreshes expired sessions when credentials are available.
+* EPUB output with cover, About page, genre metadata, per-chapter files, ToC, NCX/Nav.
 * Preserves inline images (downloaded and embedded).
 
 ---
@@ -26,15 +38,15 @@ Create a clean EPUB from Novelpia novels using Novelpia’s API. Given one or mo
 
 * Authenticates against `https://api-global.novelpia.com` and stores `login_at` token + cookies in `.api.json`.
 * Calls `novel/episode/list` to collect metadata and episodes.
-* For each episode, requests a ticket, extracts the `_t` token, then fetches the episode data.
+* For each episode, requests a ticket, extracts the `_t` token, then fetches chapter content.
 * Normalizes HTML (images, structure), embeds images into the EPUB, adds a minimal stylesheet.
-* Adds an About page with Title, Author, Status, Source, Description, and cover when available.
+* Adds an About page with Title, Author, Genre, Status, Source, Description, and cover when available.
 
 ---
 
 ## Requirements
 
-* Python 3.9+
+* Python 3.10+
 * Packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `fastapi`, `uvicorn`, `PySocks`
 
 Install packages:
@@ -42,6 +54,38 @@ Install packages:
 ```bash
 pip install -r requirements.txt
 ```
+
+---
+
+## Prebuilt Release Zips
+
+Tagged releases include:
+
+* `pia-scrap-linux.zip`
+* `pia-scrap-windows.zip`
+
+Each zip contains the executable, `README.md`, and `.env.example`. Copy `.env.example` to `.env` beside the executable to use environment variables.
+
+Linux:
+
+```bash
+./pia-scrap 49
+```
+
+Windows:
+
+```powershell
+.\pia-scrap.exe 49
+```
+
+To build the same executable locally, install PyInstaller and run:
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller --clean --noconfirm pia-scrap.spec
+```
+
+The executable is written to `dist/`.
 
 ---
 
@@ -66,7 +110,7 @@ Arguments
 * `-end` — stop fetching at this chapter number.
 * `-lang` — EPUB language code (default `en`).
 * `-proxy` — HTTP/HTTPS/SOCKS proxy, e.g. `http://host:port` or `socks5h://host:port`.
-* `-t` — seconds to wait between episode requests (default `1.0`).
+* `-t` — seconds to wait between episode requests (default `1.25`).
 * `-w` — parallel chapter fetch workers (default `1`). Increase to speed up fetching, but beware of hitting rate limits.
 * `-up` — reuse per-chapter JSON files in `.cache/` to fetch only chapters missing from cache.
 * `-r` — retry chapters that failed to fetch.
@@ -132,7 +176,9 @@ pip install -r requirements.txt
 python -m uvicorn web_app:app --reload
 ```
 
-Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, and start a background EPUB job. The web UI is EPUB-only, polls progress, shows terminal-style logs, keeps recent jobs in the browser, and auto-downloads finished EPUB files once per job.
+Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, and start a background EPUB job. The web UI is EPUB-only, polls progress, shows logs, keeps recent jobs in the browser, and auto-downloads finished EPUB files once per job.
+
+The dashboard is designed for local use on `127.0.0.1`. It accepts credentials and full cookie exports, so do not expose it directly on a public interface. If you deploy it beyond localhost, put it behind your own HTTPS/auth reverse proxy and treat `.env`, `.api.json`, and cookie text as secrets.
 
 Authentication is optional for public content. For ad-gated chapters, premium content, or chapter images, open **Authentication** and paste a full Netscape cookie export from your browser. Image hosts may require CloudFront cookies (`CloudFront-Key-Pair-Id`, `CloudFront-Policy`, `CloudFront-Signature`).
 
@@ -168,6 +214,12 @@ docker build -t pia-scrap .
 docker run --rm -p 8000:8000 -v ./output:/app/output pia-scrap
 ```
 
+Bind Docker to localhost unless you have added external auth:
+
+```bash
+docker run --rm -p 127.0.0.1:8000:8000 -v ./output:/app/output pia-scrap
+```
+
 With environment variables:
 
 ```bash
@@ -183,7 +235,7 @@ Alongside the EPUB, the tool writes:
 * `metadata.json` — title, author, tags (when available), total chapters, status, description, source URL.
 * `chapters.jsonl` — one JSON line per chapter: index, title, URL of the web reader for that episode.
 * `.cache/<episode_no>.json` — one cached chapter JSON file per episode, used by `-up` and `-r`.
-* `failed_chapters.jsonl` — failed chapter records, written only when one or more chapters fail.
+* `failed_chapters.jsonl` — failed chapter records, written only when one or more chapters fail. Premium stop for free accounts is not treated as a failed chapter.
 
 Output files are written under `output/<title>/`:
 
@@ -197,6 +249,7 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 
 ```text
 [auth] Logged in as: FoggyRam2237
+[info] User status: free
 [info] extracting metadata…
 [info] title='The Reborn Calico Princess: Dancing with the System' author='Tata' chapter=2 status=Ongoing
 [info] fetching chapters: 100%|█████████████████████████████████████████████████████████████████████████| 2/2 [00:03<00:00,  1.82s/chap]
@@ -209,7 +262,9 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 ## Tips & Troubleshooting
 
 * **Auto-Recovery**: 401/expired tokens are now automatically handled if credentials are found in `.env` or provided via CLI.
-* **Smart Backoff**: 429/Rate limits trigger an automatic exponential backoff and dynamic throttle adjustment.
+* **Retry Handling**: Rate-limit, transient content access, and server-error responses trigger retry delays before a chapter is marked failed.
+* Free accounts — ad-gated chapters may take longer because access is granted after a short wait. Premium-only chapters stop the run for free accounts, and already fetched chapters still produce EPUB/TXT output.
+* Ad-gated runs print one notice when the first gated chapter is detected, then continue quietly for later gated chapters.
 * No-op updates — when `-up` finds every server chapter already cached, existing EPUB/TXT outputs are left unchanged.
 * Missing images — paste full browser Netscape cookies if chapter images use `pv-gn.novelpia.com`; those URLs may require CloudFront cookies before images can be embedded.
 * HTTP debug — pass `-v` to print masked headers/params and short body previews.

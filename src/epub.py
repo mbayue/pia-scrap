@@ -1,68 +1,57 @@
 import html
 import os
-import time
 
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlparse
-from bs4 import BeautifulSoup
 from ebooklib import epub
 from tqdm import tqdm
+
 from src.api import NovelpiaClient
 from src.const import BASE_URL
-from src.helper import ensure_dir, kebab, media_type_from_ext, normalize_url
+from src.contracts import ChapterResult, EpisodeItem, NovelResponse
+from src.export import EpubImageAdapter, ImageFetcher
+from src.helper import ensure_dir, kebab, normalize_url
 
 # ----------------------------
 # EPUB Builder
 # ----------------------------
+
+def _genre_names(novel: NovelResponse) -> list[str]:
+    result = novel["result"]
+    nv = result["novel"]
+    tag_items = result.get("tag_list") or nv.get("tag_list") or []
+    names: list[str] = []
+    for tag in tag_items:
+        if isinstance(tag, str):
+            names.append(tag)
+            continue
+        if isinstance(tag, dict):
+            name = tag.get("tag_name") or tag.get("name") or tag.get("title")
+            if isinstance(name, str):
+                names.append(name)
+    return list(dict.fromkeys(names))
 
 class EpubBuilder:
     def __init__(self, out_dir: str, debug_dump: bool = False):
         self.out_dir = out_dir
         self.debug_dump = debug_dump
         ensure_dir(out_dir)
+        self._image_fetcher = ImageFetcher(debug_dump=debug_dump)
 
-    def _fetch_headers(self, client: NovelpiaClient, url: str) -> Dict[str, str]:
-        headers = {
-            "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "referer": BASE_URL + "/",
-        }
-        cloudfront_parts = []
-        try:
-            for cookie in client.s.cookies:
-                cookie_name = cookie.name
-                if cookie_name.startswith("CloudFront-") or cookie_name in ("Key-Pair-Id", "Policy", "Signature"):
-                    cloudfront_parts.append(f"{cookie_name}={cookie.value}")
-        except Exception:
-            pass
-        if cloudfront_parts:
-            headers["Cookie"] = "; ".join(cloudfront_parts)
-        return headers
+    def _fetch_headers(self, client: NovelpiaClient, url: str) -> dict[str, str]:
+        return self._image_fetcher.fetch_headers(client)
 
-    def _fetch_bytes(self, client: NovelpiaClient, url: str) -> Optional[bytes]:
-        for attempt in range(1, 4):
-            try:
-                resp = client.s.get(url, headers=self._fetch_headers(client, url), timeout=client.timeout)
-                if resp.status_code == 429:
-                    wait = 2.0 * attempt
-                    time.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                return resp.content
-            except Exception:
-                if attempt < 3:
-                    time.sleep(1.0)
-                continue
-        return None
+    def _fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
+        return self._image_fetcher.fetch_bytes(client, url)
 
-    def build(self, client: NovelpiaClient, novel: Dict, episodes: List[Dict],
-              filename_hint: Optional[str] = None, language: str = "en",
-              author_fallback: str = "Unknown", css_text: Optional[str] = None,
-              novel_id: Optional[int] = None, fetched_results: Optional[List[Dict]] = None,
-              max_workers: int = 1) -> Tuple[str, str, int]:
-        nv = novel["result"]["novel"]
+    def build(self, client: NovelpiaClient, novel: NovelResponse, episodes: list[EpisodeItem],
+              filename_hint: str | None = None, language: str = "en",
+              author_fallback: str = "Unknown", css_text: str | None = None,
+              novel_id: int | None = None, fetched_results: list[ChapterResult] | None = None,
+              max_workers: int = 1) -> tuple[str, str, int]:
+        result = novel["result"]
+        nv = result["novel"]
         title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
-        writers = novel["result"].get("writer_list") or []
-        author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else author_fallback)
+        writers = result.get("writer_list") or []
+        author = (writers[0].get("writer_name") if writers else None) or author_fallback
         status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
         description = (nv.get("novel_story") or "").strip()
 
@@ -93,45 +82,13 @@ class EpubBuilder:
                               media_type="text/css", content=default_css.encode("utf-8"))
         book.add_item(style)
 
-        spine: List = ["nav"]
-        toc: List = []
-        image_cache: Dict[str, str] = {}
-        img_index = 1
-
-        def add_images_and_rewrite(html_str: str) -> Tuple[str, List[epub.EpubItem]]:
-            nonlocal img_index
-            soup = BeautifulSoup(html_str, "html.parser")
-            added_items: List[epub.EpubItem] = []
-
-            for img in soup.find_all("img"):
-                src = img.get("src")
-                if not src:
-                    continue
-                src = normalize_url(src)
-                if src in image_cache:
-                    img["src"] = image_cache[src]
-                    continue
-
-                path = urlparse(src).path
-                ext = os.path.splitext(path)[1].lower() or ".jpg"
-                if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
-                    ext = ".jpg"
-
-                img_bytes = self._fetch_bytes(client, src)
-                if not img_bytes:
-                    # leave external
-                    continue
-
-                fname = f"images/img_{img_index:05d}{ext}"
-                image_cache[src] = fname
-                img_index += 1
-
-                item = epub.EpubItem(uid=f"img{img_index}", file_name=fname,
-                                     media_type=media_type_from_ext(ext), content=img_bytes)
-                added_items.append(item)
-                img["src"] = fname
-
-            return str(soup), added_items
+        spine: list[str | epub.EpubHtml] = ["nav"]
+        toc: list[epub.EpubHtml] = []
+        image_adapter = EpubImageAdapter(
+            self._image_fetcher,
+            client,
+            embed_images=self._image_fetcher.can_fetch_chapter_images(client),
+        )
 
         if fetched_results is None:
             pbar = tqdm(total=len(episodes), desc="[info] fetching chapters", unit="chap")
@@ -152,10 +109,10 @@ class EpubBuilder:
                 print(f"[warn] Failed to fetch chapter {i}: {err}")
                 continue
 
-            html_text = res["html"]
-            epi_title = res["epi_title"]
-            
-            html_text, new_imgs = add_images_and_rewrite(html_text)
+            html_text = res.get("html") or ""
+            epi_title = res.get("epi_title") or f"Episode {i}"
+
+            html_text, new_imgs = image_adapter.add_images_and_rewrite(html_text)
 
             chapter = epub.EpubHtml(
                 title=epi_title,
@@ -181,10 +138,17 @@ class EpubBuilder:
         meta_parts = []
         meta_parts.append(f"<h1>{html.escape(title)}</h1>")
         if has_cover:
-            meta_parts.append("<p><img src='cover.jpg' alt='Cover' style='width:230px;max-width:90%;height:auto;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>")
+            meta_parts.append(
+                "<p><img src='cover.jpg' alt='Cover' "
+                "style='width:230px;max-width:90%;height:auto;border-radius:12px;"
+                "box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>"
+            )
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
         meta_parts.append(f"<p><strong>Status:</strong> {html.escape(status)}</p>")
+        genres = _genre_names(novel)
+        if genres:
+            meta_parts.append(f"<p><strong>Genre:</strong> {html.escape(', '.join(genres))}</p>")
         if src_url:
             meta_parts.append(f"<p><strong>Source:</strong> <a href='{src_url}'>{src_url}</a></p>")
         if description:

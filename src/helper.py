@@ -1,14 +1,14 @@
-
 import base64
 import json
 import os
 import re
 import tempfile
-from http.cookiejar import MozillaCookieJar
-
-from typing import Any, Dict, Optional, Tuple
+from collections.abc import Mapping
+from dataclasses import dataclass
+from http.cookiejar import CookieJar, MozillaCookieJar
+from typing import Any, TypedDict
 from urllib.parse import parse_qs, urljoin, urlparse
-import requests
+
 from src.const import BASE_URL, CONFIG_PATH, IMG_BASE_HTTPS
 
 # ----------------------------
@@ -42,7 +42,7 @@ def media_type_from_ext(ext: str) -> str:
         return "image/webp"
     return "image/jpeg"
 
-def looks_like_jwt(token: Optional[str]) -> bool:
+def looks_like_jwt(token: str | None) -> bool:
     if not isinstance(token, str):
         return False
     parts = token.split(".")
@@ -61,24 +61,61 @@ def kebab(s: str) -> str:
     return s or "book"
 
 # ----------------------------
-# Config management
+# Config/auth management
 # ----------------------------
 
-def load_config() -> Dict[str, Any]:
+class AuthConfig(TypedDict, total=False):
+    login_at: str
+    userkey: str
+    tkey: str
+
+@dataclass(frozen=True, slots=True)
+class CookieAuth:
+    login_at: str | None
+    userkey: str | None
+    tkey: str | None
+
+def _clean_config_value(raw: object) -> str:
+    return raw.strip() if isinstance(raw, str) else ""
+
+def normalize_auth_config(raw: Mapping[str, object]) -> AuthConfig:
+    return {
+        "login_at": _clean_config_value(raw.get("login_at")),
+        "userkey": _clean_config_value(raw.get("userkey")),
+        "tkey": _clean_config_value(raw.get("tkey")),
+    }
+
+def load_config() -> AuthConfig:
     try:
         if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
-    except Exception as e:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                raw = json.load(f) or {}
+                if isinstance(raw, dict):
+                    return normalize_auth_config({str(k): v for k, v in raw.items()})
+                print("Error occurred while loading config: config root is not an object")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         print(f"Error occurred while loading config: {e}")
         return {}
     return {}
 
-def save_config(cfg: Dict[str, Any]) -> None:
+def save_config(cfg: Mapping[str, str | None]) -> None:
+    tmp_path = ""
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except Exception as e:
+        config_dir = os.path.dirname(CONFIG_PATH) or "."
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=config_dir, delete=False) as f:
+            tmp_path = f.name
+            json.dump({k: v or "" for k, v in cfg.items()}, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp_path, CONFIG_PATH)
+    except OSError as e:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         print(f"Error occurred while saving config: {e}")
         pass
 
@@ -86,16 +123,27 @@ def save_config(cfg: Dict[str, Any]) -> None:
 # Auth token management & header merging
 # ----------------------------
 
-def merge_login_at(headers: dict, login_at: Optional[str]) -> dict:
+def merge_login_at(headers: Mapping[str, str], login_at: str | None) -> dict[str, str]:
     h = dict(headers or {})
     if login_at:
         h["login-at"] = login_at
     return h
 
+SENSITIVE_KEY_PARTS = (
+    "pass", "passwd", "password", "authorization", "token",
+    "login-at", "login_at", "loginat", "_t", "cookie", "set-cookie",
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    lowered = str(key).lower()
+    return any(part in lowered for part in SENSITIVE_KEY_PARTS)
+
+
 def _mask_value(v: Any) -> Any:
     try:
         if isinstance(v, dict):
-            return {k: _mask_value(v2) for k, v2 in v.items()}
+            return {k: "***" if _is_sensitive_key(k) else _mask_value(v2) for k, v2 in v.items()}
         if isinstance(v, list):
             return [_mask_value(x) for x in v]
         if isinstance(v, str):
@@ -111,16 +159,12 @@ def _mask_value(v: Any) -> Any:
     except Exception:
         return "<masked>"
 
-def mask_kv(d: Optional[dict]) -> Optional[dict]:
-    if not isinstance(d, dict):
+def mask_kv(d: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if d is None:
         return d
     out = {}
     for k, v in d.items():
-        kl = str(k).lower()
-        if any(x in kl for x in (
-            "pass", "passwd", "password", "authorization", "token",
-            "login-at", "login_at", "_t", "cookie", "set-cookie"
-        )):
+        if _is_sensitive_key(k):
             out[k] = "***"
         else:
             out[k] = _mask_value(v)
@@ -131,7 +175,7 @@ def j(x: Any) -> str:
         return json.dumps(x, ensure_ascii=False)
     except Exception:
         return str(x)
-    
+
 def load_netscape_cookies(path: str) -> MozillaCookieJar:
     jar = MozillaCookieJar()
     jar.load(path, ignore_discard=True, ignore_expires=True)
@@ -151,46 +195,49 @@ def load_netscape_cookies_text(cookie_text: str) -> MozillaCookieJar:
             pass
     return jar
 
-def get_cookie_value(cookie_jar, name: str) -> Optional[str]:
+def get_cookie_value(cookie_jar: CookieJar, name: str) -> str | None:
     target = name.lower()
     try:
         for cookie in cookie_jar:
             if cookie.name.lower() == target:
                 return cookie.value
-    except Exception as e:
+    except (AttributeError, TypeError) as e:
         print(f"Error occurred while reading cookies: {e}")
     return None
 
-def attach_auth_cookies(session, headers=None):
-        ck = getattr(session, "cookies", None)
-        if ck is None:
-            return headers
+def cookie_auth_from_jar(cookie_jar: CookieJar, login_at_fallback: str | None = None) -> CookieAuth:
+    return CookieAuth(
+        login_at=get_cookie_value(cookie_jar, "LOGINAT")
+        or get_cookie_value(cookie_jar, "login_at")
+        or login_at_fallback,
+        userkey=get_cookie_value(cookie_jar, "USERKEY"),
+        tkey=get_cookie_value(cookie_jar, "TKEY"),
+    )
 
-        uval = None
-        tval = None
+def is_placeholder_userkey(userkey: str | None) -> bool:
+    return userkey in {"login-user"}
 
-        try:
-            for c in ck:
-                if c.name == "USERKEY":
-                    uval = c.value
-                elif c.name == "TKEY":
-                    tval = c.value
-        except Exception as e:
-            print(f"Error occurred while fetching cookies: {e}")
+def attach_auth_cookies(session, headers: Mapping[str, str] | None = None) -> dict[str, str] | None:
+    ck = getattr(session, "cookies", None)
+    if ck is None:
+        return dict(headers) if headers is not None else None
 
-        cookie_parts = []
-        if uval:
-            cookie_parts.append(f"USERKEY={uval}")
-        if tval:
-            cookie_parts.append(f"TKEY={tval}")
+    auth = cookie_auth_from_jar(ck)
 
-        cookie_parts.append("last_login=basic")
+    cookie_parts = []
+    if auth.userkey:
+        cookie_parts.append(f"USERKEY={auth.userkey}")
+    if auth.tkey:
+        cookie_parts.append(f"TKEY={auth.tkey}")
 
-        if cookie_parts:
-            headers = dict(headers or {})
-            headers.setdefault("Cookie", "; ".join(cookie_parts))
+    cookie_parts.append("last_login=basic")
 
-        return headers
+    if cookie_parts:
+        merged = dict(headers or {})
+        merged.setdefault("Cookie", "; ".join(cookie_parts))
+        return merged
+
+    return dict(headers) if headers is not None else None
 
 # ----------------------------
 # Token extraction (STRICT)
@@ -206,13 +253,13 @@ def iter_strings(obj):
         for v in obj:
             yield from iter_strings(v)
 
-def extract_t_token(tdata: dict) -> Tuple[Optional[str], Optional[str]]:
+def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
     """Return (token, direct_content_url_or_none).
     Prefer JWT-like tokens, but accept any non-empty string if present.
     If using URL, accept any _t value on the official content endpoint.
     """
     res = tdata.get("result", {}) if isinstance(tdata, dict) else {}
-    fallback_token: Optional[str] = None
+    fallback_token: str | None = None
 
     # 1) common keys at result
     for k in ("_t", "t", "token"):

@@ -1,39 +1,65 @@
+import argparse
 import base64
 import os
 import re
+import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 from src import const
 from src.api import NovelpiaClient
 from src.builder import build_epub, build_txt
-from src.helper import get_cookie_value, load_config, load_netscape_cookies, load_netscape_cookies_text, save_config
-
+from src.contracts import QueueResult, QueueSummaryRow
+from src.helper import (
+    cookie_auth_from_jar,
+    is_placeholder_userkey,
+    load_config,
+    load_netscape_cookies,
+    load_netscape_cookies_text,
+    save_config,
+)
 
 LogFn = Callable[[str], None]
+
+
+def _load_runtime_dotenv() -> None:
+    if getattr(sys, "frozen", False):
+        load_dotenv(Path(sys.executable).resolve().with_name(".env"))
+        return
+    load_dotenv()
 
 
 @dataclass
 class QueueOptions:
     out: str = "output"
-    start_chapter: Optional[int] = None
-    end_chapter: Optional[int] = None
+    start_chapter: int | None = None
+    end_chapter: int | None = None
     max_chapters: int = 0
     lang: str = "en"
-    proxy: Optional[str] = None
+    proxy: str | None = None
     debug: bool = False
-    throttle: float = 1.0
+    throttle: float = 1.25
     workers: int = 1
     update: bool = False
     retry_failed: bool = False
     txt: bool = False
-    email: Optional[str] = None
-    password: Optional[str] = None
-    cookie_file: Optional[str] = None
-    cookie_text: Optional[str] = None
+    email: str | None = None
+    password: str | None = None
+    cookie_file: str | None = None
+    cookie_text: str | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class QueueRequest:
+    novel_ids: list[int]
+    options: QueueOptions
+    show_summary: bool
+
+class CliUsageError(ValueError):
+    pass
 
 def _parse_novel_token(item: str) -> int:
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
@@ -42,8 +68,8 @@ def _parse_novel_token(item: str) -> int:
     return int(item)
 
 
-def parse_queue_lines(lines: Iterable[str], source: str = "queue") -> List[int]:
-    novel_ids: List[int] = []
+def parse_queue_lines(lines: Iterable[str], source: str = "queue") -> list[int]:
+    novel_ids: list[int] = []
     for line_no, line in enumerate(lines, 1):
         line = line.split("#", 1)[0].strip()
         if not line:
@@ -52,18 +78,54 @@ def parse_queue_lines(lines: Iterable[str], source: str = "queue") -> List[int]:
             try:
                 novel_ids.append(_parse_novel_token(item))
             except ValueError:
-                raise ValueError(f"{source}:{line_no}: invalid novel_id or novel URL '{item}'")
+                raise ValueError(f"{source}:{line_no}: invalid novel_id or novel URL '{item}'") from None
     return novel_ids
 
 
-def load_queue_file(path: str) -> List[int]:
-    with open(path, "r", encoding="utf-8") as f:
+def load_queue_file(path: str) -> list[int]:
+    with open(path, encoding="utf-8") as f:
         return parse_queue_lines(f, source=path)
 
 
-def dedupe_novel_ids(novel_ids: Iterable[int]) -> Tuple[List[int], List[int]]:
-    unique_ids: List[int] = []
-    skipped_ids: List[int] = []
+def build_queue_request(args: argparse.Namespace) -> QueueRequest:
+    novel_ids = list(args.novel_ids)
+    for queue_path in args.queue:
+        try:
+            novel_ids.extend(load_queue_file(queue_path))
+        except OSError as e:
+            raise CliUsageError(f"Unable to read queue file '{queue_path}': {e}") from e
+        except ValueError as e:
+            raise CliUsageError(str(e)) from e
+
+    if not novel_ids:
+        raise CliUsageError("provide at least one novel_id or -q FILE")
+
+    return QueueRequest(
+        novel_ids=novel_ids,
+        options=QueueOptions(
+            out=args.out,
+            start_chapter=args.start_chapter,
+            end_chapter=args.end_chapter,
+            max_chapters=args.max_chapters,
+            lang=args.lang,
+            proxy=args.proxy,
+            debug=args.debug,
+            throttle=args.throttle,
+            workers=args.workers,
+            update=args.update,
+            retry_failed=args.retry_failed,
+            txt=args.txt,
+            email=args.email,
+            password=args.password,
+            cookie_file=getattr(args, "cookie_file", None),
+            cookie_text=getattr(args, "cookie_text", None),
+        ),
+        show_summary=len(novel_ids) > 1 or bool(args.queue),
+    )
+
+def dedupe_novel_ids(novel_ids: Iterable[int]) -> tuple[list[int], list[int]]:
+    unique_ids: list[int] = []
+    skipped_ids: list[int] = []
     seen = set()
     for novel_id in novel_ids:
         if novel_id in seen:
@@ -74,7 +136,7 @@ def dedupe_novel_ids(novel_ids: Iterable[int]) -> Tuple[List[int], List[int]]:
     return unique_ids, skipped_ids
 
 
-def _cookie_text_from_env() -> Optional[str]:
+def _cookie_text_from_env() -> str | None:
     raw_text = os.getenv("NOVELPIA_COOKIE_TEXT")
     if raw_text:
         return raw_text.replace("\\n", "\n")
@@ -83,17 +145,19 @@ def _cookie_text_from_env() -> Optional[str]:
         try:
             return base64.b64decode(encoded_text).decode("utf-8")
         except Exception as e:
-            raise RuntimeError(f"Invalid NOVELPIA_COOKIE_TEXT_B64: {e}")
+            raise RuntimeError(f"Invalid NOVELPIA_COOKIE_TEXT_B64: {e}") from e
     return None
 
 def create_client(options: QueueOptions) -> NovelpiaClient:
-    load_dotenv()
+    _load_runtime_dotenv()
     const.HTTP_LOG = bool(options.debug)
 
     cfg = load_config()
-    cfg_login_at = (cfg.get("login_at") or "").strip() or None
-    cfg_userkey = (cfg.get("userkey") or "").strip() or None
-    cfg_tkey = (cfg.get("tkey") or "").strip() or None
+    cfg_login_at = cfg.get("login_at") or None
+    cfg_userkey = cfg.get("userkey") or None
+    if is_placeholder_userkey(cfg_userkey):
+        cfg_userkey = None
+    cfg_tkey = cfg.get("tkey") or None
 
     email = options.email or os.getenv("NOVELPIA_EMAIL")
     password = options.password or os.getenv("NOVELPIA_PASSWORD")
@@ -109,27 +173,24 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
         )
         if cookie_text:
             jar = load_netscape_cookies_text(cookie_text)
-        else:
+        elif cookie_file:
             cookie_path = os.path.expanduser(cookie_file)
             jar = load_netscape_cookies(cookie_path)
+        else:
+            raise RuntimeError("cookie_text or cookie_file required")
+        auth = cookie_auth_from_jar(jar, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
+        client.tokens.userkey = auth.userkey
+        client.tokens.tkey = auth.tkey
+        client.tokens.login_at = auth.login_at
+        if not auth.userkey or is_placeholder_userkey(auth.userkey):
+            raise RuntimeError(
+                "Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again."
+            )
         client.s.cookies.update(jar)
-        userkey_val = get_cookie_value(client.s.cookies, "USERKEY")
-        tkey_val = get_cookie_value(client.s.cookies, "TKEY")
-        login_at_val = (
-            get_cookie_value(client.s.cookies, "LOGINAT")
-            or get_cookie_value(client.s.cookies, "login_at")
-            or os.getenv("NOVELPIA_LOGIN_AT")
-            or cfg_login_at
-        )
-        client.tokens.userkey = userkey_val
-        client.tokens.tkey = tkey_val
-        client.tokens.login_at = login_at_val
-        if not userkey_val:
-            raise RuntimeError("Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again.")
         save_config({
-            "login_at": login_at_val or "",
-            "userkey": userkey_val,
-            "tkey": tkey_val or "",
+            "login_at": auth.login_at or "",
+            "userkey": auth.userkey,
+            "tkey": auth.tkey or "",
         })
         return client
 
@@ -143,20 +204,12 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
             tkey=cfg_tkey,
         )
         client.login()
-        userkey_val = None
-        tkey_val = None
-        try:
-            for c in client.s.cookies:
-                if c.name == "USERKEY":
-                    userkey_val = c.value
-                elif c.name == "TKEY":
-                    tkey_val = c.value
-        except Exception as e:
-            print(f"Error occurred while fetching cookies: {e}")
+        auth = cookie_auth_from_jar(client.s.cookies)
+        login_userkey = None if is_placeholder_userkey(auth.userkey) else auth.userkey
         save_config({
             "login_at": client.tokens.login_at,
-            "userkey": userkey_val or cfg_userkey or "",
-            "tkey": tkey_val or client.tokens.tkey or cfg_tkey or "",
+            "userkey": login_userkey or client.tokens.userkey or cfg_userkey,
+            "tkey": auth.tkey or client.tokens.tkey or cfg_tkey,
         })
         return client
 
@@ -175,7 +228,7 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
     raise RuntimeError("No credentials or stored tokens found. Provide email/password to login once.")
 
 
-def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = print) -> Dict:
+def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = print) -> QueueResult:
     novel_ids, skipped_ids = dedupe_novel_ids(novel_ids)
     if not novel_ids:
         raise ValueError("provide at least one novel_id")
@@ -183,65 +236,98 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
         log("[info] Skipping duplicate novel IDs: " + ", ".join(str(novel_id) for novel_id in skipped_ids))
 
     client = create_client(options)
-    summary_rows: List[Dict] = []
-    failures: List[Tuple[int, str]] = []
+    summary_rows: list[QueueSummaryRow] = []
+    failures: list[tuple[int, str]] = []
     total = len(novel_ids)
     max_chapters = options.max_chapters if options.max_chapters and options.max_chapters > 0 else None
 
-    for idx, novel_id in enumerate(novel_ids, 1):
-        if total > 1:
-            log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
+    try:
+        for idx, novel_id in enumerate(novel_ids, 1):
+            if total > 1:
+                log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
 
-        try:
-            if options.txt:
-                out_dir_final, title, count = build_txt(
-                    client,
-                    novel_id,
-                    options.out,
-                    start_chapter=options.start_chapter,
-                    end_chapter=options.end_chapter,
-                    max_chapters=max_chapters,
-                    language=options.lang,
-                    debug_dump=options.debug,
-                    update=options.update,
-                    retry_failed=options.retry_failed,
-                    max_workers=options.workers,
-                )
-                if out_dir_final is None:
-                    log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
-                    summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
+            try:
+                if options.txt:
+                    out_dir_final, title, count = build_txt(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                    )
+                    if out_dir_final is None:
+                        log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
+                        summary_rows.append({
+                            "novel_id": novel_id,
+                            "status": "no updates",
+                            "chapters": 0,
+                            "title": title,
+                            "path": None,
+                        })
+                    else:
+                        log(f"[success] Wrote TXT files under: {out_dir_final}")
+                        summary_rows.append({
+                            "novel_id": novel_id,
+                            "status": "txt",
+                            "chapters": count,
+                            "title": title,
+                            "path": out_dir_final,
+                        })
                 else:
-                    log(f"[success] Wrote TXT files under: {out_dir_final}")
-                    summary_rows.append({"novel_id": novel_id, "status": "txt", "chapters": count, "title": title, "path": out_dir_final})
-            else:
-                out_file, title, count = build_epub(
-                    client,
-                    novel_id,
-                    options.out,
-                    start_chapter=options.start_chapter,
-                    end_chapter=options.end_chapter,
-                    max_chapters=max_chapters,
-                    language=options.lang,
-                    debug_dump=options.debug,
-                    update=options.update,
-                    retry_failed=options.retry_failed,
-                    max_workers=options.workers,
-                )
-                if out_file is None:
-                    log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
-                    summary_rows.append({"novel_id": novel_id, "status": "no updates", "chapters": 0, "title": title, "path": None})
-                else:
-                    log(f"[success] Wrote EPUB: {out_file}")
-                    summary_rows.append({"novel_id": novel_id, "status": "epub", "chapters": count, "title": title, "path": out_file})
-        except Exception as e:
-            failures.append((novel_id, str(e)))
-            summary_rows.append({"novel_id": novel_id, "status": "failed", "chapters": None, "title": str(e), "path": None})
-            log(f"[error] Failed to build novel {novel_id}: {e}")
+                    out_file, title, count = build_epub(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                    )
+                    if out_file is None:
+                        log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
+                        summary_rows.append({
+                            "novel_id": novel_id,
+                            "status": "no updates",
+                            "chapters": 0,
+                            "title": title,
+                            "path": None,
+                        })
+                    else:
+                        log(f"[success] Wrote EPUB: {out_file}")
+                        summary_rows.append({
+                            "novel_id": novel_id,
+                            "status": "epub",
+                            "chapters": count,
+                            "title": title,
+                            "path": out_file,
+                        })
+            except Exception as e:
+                failures.append((novel_id, str(e)))
+                summary_rows.append({
+                    "novel_id": novel_id,
+                    "status": "failed",
+                    "chapters": None,
+                    "title": str(e),
+                    "path": None,
+                })
+                log(f"[error] Failed to build novel {novel_id}: {e}")
+    finally:
+        client.close()
 
     return {"rows": summary_rows, "failures": failures, "skipped_ids": skipped_ids}
 
 
-def print_queue_summary(rows: List[Dict]) -> None:
+def print_queue_summary(rows: list[QueueSummaryRow]) -> None:
     if not rows:
         return
 

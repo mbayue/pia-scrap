@@ -15,6 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
+COPY templates ./templates
 COPY web_app.py main.py ./
 
 RUN mkdir -p /app/output && chown -R app:app /app

@@ -1,0 +1,225 @@
+import requests
+
+from src.api import NovelpiaClient
+from src.contracts import NovelResponse
+from src.epub import EpubBuilder
+from src.export import EpubImageAdapter, ImageFetcher, write_txt_chapters
+
+
+class OkResponse:
+    status_code = 200
+    content = b"image-bytes"
+
+    def __init__(self, headers: dict[str, str] | None = None):
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        return None
+
+
+class ErrorResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.content = b""
+        self.headers = {}
+
+    def raise_for_status(self):
+        response = requests.Response()
+        response.status_code = self.status_code
+        raise requests.HTTPError("blocked", response=response)
+
+
+def _failing_client(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("network down")))
+    return client
+
+
+def test_fetch_bytes_logs_debug_failure(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    builder = EpubBuilder(str(tmp_path), debug_dump=True)
+
+    result = builder._fetch_bytes(_failing_client(monkeypatch), "https://example.com/image.jpg")
+
+    assert result is None
+    assert "[debug] image fetch failed: https://example.com/image.jpg: network down" in capsys.readouterr().out
+
+
+def test_fetch_bytes_stays_quiet_without_debug(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    builder = EpubBuilder(str(tmp_path), debug_dump=False)
+
+    result = builder._fetch_bytes(_failing_client(monkeypatch), "https://example.com/image.jpg")
+
+    assert result is None
+    assert capsys.readouterr().out == ""
+
+
+def test_build_continues_when_chapter_image_fetch_fails(monkeypatch, tmp_path):
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {"novel_no": 49, "novel_name": "Book", "flag_complete": 0},
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    client = _failing_client(monkeypatch)
+
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda path, _book, _opts: written.append(path))
+
+    result = EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p><img src="https://example.com/i.jpg"></p>'}],
+    )
+
+    assert result == (str(tmp_path / "book" / "book.epub"), "Book", 1)
+    assert written == [str(tmp_path / "book" / "book.epub")]
+
+
+def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp_path):
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {"novel_no": 49, "novel_name": "Book", "flag_complete": 0},
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    password = "test-" + "password"
+    client = NovelpiaClient(email="user@example.com", password=password, throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image fetch")))
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
+
+    EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}],
+    )
+
+    chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
+    assert "<img" not in chapter.content
+    assert "before" in chapter.content
+    assert "after" in chapter.content
+    assert all(not item.file_name.startswith("images/") for item in written[0].get_items())
+
+
+def test_image_fetch_requires_complete_cloudfront_signed_cookie_set():
+    client = NovelpiaClient(throttle=0)
+    fetcher = ImageFetcher()
+
+    client.s.cookies.set("CloudFront-Key-Pair-Id", "key")
+    client.s.cookies.set("CloudFront-Signature", "sig")
+
+    assert fetcher.can_fetch_chapter_images(client) is False
+
+    client.s.cookies.set("CloudFront-Policy", "policy")
+
+    assert fetcher.can_fetch_chapter_images(client) is True
+
+
+def test_build_about_page_includes_genres(monkeypatch, tmp_path):
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {
+                "novel_no": 49,
+                "novel_name": "Book",
+                "flag_complete": 1,
+                "tag_list": [{"tag_name": "Fantasy"}, {"name": "Comedy"}, "Drama"],
+            },
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    client = _failing_client(monkeypatch)
+
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda path, book, _opts: written.append((path, book)))
+
+    EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": "<p>ok</p>"}],
+    )
+
+    about = next(item for item in written[0][1].get_items() if item.file_name == "about.xhtml")
+    assert "<strong>Genre:</strong> Fantasy, Comedy, Drama" in about.content
+
+def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
+    adapter = EpubImageAdapter(ImageFetcher(), client)
+
+    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
+
+    assert 'src="images/img_00001.png"' in rewritten
+    assert len(items) == 1
+    assert items[0].file_name == "images/img_00001.png"
+    assert items[0].content == b"image-bytes"
+
+
+def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
+    adapter = EpubImageAdapter(ImageFetcher(), client)
+
+    rewritten, _items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
+
+    assert "<html" not in rewritten
+    assert "<body" not in rewritten
+    assert rewritten.startswith("<p>")
+
+
+def test_epub_image_adapter_preserves_external_image_when_fetch_fails(monkeypatch):
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    adapter = EpubImageAdapter(ImageFetcher(), _failing_client(monkeypatch))
+
+    rewritten, items = adapter.add_images_and_rewrite('<p><img src="https://example.com/missing.jpg"></p>')
+
+    assert 'src="https://example.com/missing.jpg"' in rewritten
+    assert items == []
+
+
+def test_fetch_bytes_does_not_retry_permanent_4xx(monkeypatch, capsys):
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: (_ for _ in ()).throw(AssertionError("no retry")))
+    client = NovelpiaClient(throttle=0)
+    calls = []
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: calls.append(True) or ErrorResponse(403))
+
+    result = ImageFetcher(debug_dump=True).fetch_bytes(client, "https://example.com/missing.jpg")
+
+    assert result is None
+    assert calls == [True]
+    assert "image fetch failed" in capsys.readouterr().out
+
+
+def test_epub_image_adapter_derives_extension_for_unsupported_image_url(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse({"Content-Type": "image/png"}))
+    adapter = EpubImageAdapter(ImageFetcher(), client)
+
+    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/file.bin"></p>')
+
+    assert 'src="images/img_00001.png"' in rewritten
+    assert len(items) == 1
+    assert items[0].file_name == "images/img_00001.png"
+
+
+def test_write_txt_chapters_exports_successful_chapter_and_skips_failed(tmp_path, capsys):
+    count = write_txt_chapters(
+        str(tmp_path),
+        [
+            {"epi_no": 1, "epi_title": "One", "html": "<p>Hello<br>world</p>"},
+            {"epi_no": 2, "epi_title": "Two", "error": "blocked"},
+        ],
+    )
+
+    assert count == 1
+    assert (tmp_path / "1_One.txt").read_text(encoding="utf-8") == "Hello\nworld"
+    assert "[warn] Failed to fetch chapter 2: blocked" in capsys.readouterr().out

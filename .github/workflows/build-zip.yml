@@ -1,0 +1,83 @@
+name: Build zip artifacts
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }} zip
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            executable: pia-scrap
+          - name: windows
+            os: windows-latest
+            executable: pia-scrap.exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build executable
+        run: pyinstaller --clean --noconfirm pia-scrap.spec
+
+      - name: Package zip
+        shell: python
+        run: |
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+
+          name = "${{ matrix.name }}"
+          executable = "${{ matrix.executable }}"
+          archive = Path(f"pia-scrap-{name}.zip")
+          files = [
+              (Path("dist") / executable, executable),
+              (Path("README.md"), "README.md"),
+              (Path(".env.example"), ".env.example"),
+          ]
+
+          with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
+              for source, target in files:
+                  zip_file.write(source, target)
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pia-scrap-${{ matrix.name }}
+          path: pia-scrap-${{ matrix.name }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download zip artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pia-scrap-*
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release create "$TAG_NAME" pia-scrap-*.zip --generate-notes

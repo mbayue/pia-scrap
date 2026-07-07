@@ -219,3 +219,6 @@ cookies.txt
 failed_chapters.jsonl
 chapters.jsonl
 metadata.json
+.omop
+.omo
+.venv-build

@@ -1,12 +1,18 @@
+from typing import Literal
+
 from bs4 import BeautifulSoup
+
+from src.contracts import EpisodeItem, NovelResponse
 from src.helper import normalize_url
+
+AccountStatus = Literal["paid", "free", "unknown"]
 
 # ----------------------------
 # Novelpia Novel & Episodes Fetcher
 # ----------------------------
 
 def html_from_episode_text(raw_html: str) -> str:
-    soup = BeautifulSoup(raw_html or "", "html.parser")
+    soup = BeautifulSoup(raw_html or "", "lxml")
 
     # normalize images
     for img in soup.find_all("img"):
@@ -17,7 +23,7 @@ def html_from_episode_text(raw_html: str) -> str:
         if img.get("src"):
             img["src"] = normalize_url(img["src"])
 
-    # Ensure document wrapper
+    # Ensure document wrapper with meta charset="utf-8"
     if not soup.find("html"):
         html_tag = soup.new_tag("html")
         head = soup.new_tag("head")
@@ -29,18 +35,56 @@ def html_from_episode_text(raw_html: str) -> str:
         html_tag.append(head)
         html_tag.append(body)
         soup.append(html_tag)
+    else:
+        # With lxml, soup often gets auto-wrapped in <html><body>
+        # We need to ensure the head and meta tag are present to avoid regressions.
+        head = soup.find("head")
+        if not head:
+            head = soup.new_tag("head")
+            html_tag = soup.html
+            if html_tag is not None:
+                html_tag.insert(0, head)
+
+        meta = head.find("meta", charset="utf-8")
+        if not meta:
+            meta = soup.new_tag("meta", charset="utf-8")
+            head.append(meta)
 
     return str(soup)
 
-def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None):
+def user_subscription_status(me_response: object) -> AccountStatus:
+    if not isinstance(me_response, dict):
+        return "unknown"
+    result = me_response.get("result")
+    if not isinstance(result, dict):
+        return "unknown"
+    login = result.get("login")
+    if not isinstance(login, dict):
+        return "unknown"
+    subscription = result.get("subscription")
+    if subscription is not None:
+        return "paid"
+    plus_type = login.get("mem_plus_type")
+    if isinstance(plus_type, int):
+        return "paid" if plus_type != 0 else "free"
+    if isinstance(plus_type, str) and plus_type.isdecimal():
+        return "paid" if int(plus_type) != 0 else "free"
+    return "unknown"
+
+def fetch_novel_and_episodes(
+    client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None
+) -> tuple[NovelResponse, list[EpisodeItem], str, AccountStatus]:
     # Auth check
+    account_status: AccountStatus = "unknown"
     try:
         res = client.me()
         if str(res.get("statusCode")) == "200":
+            account_status = user_subscription_status(res)
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
             print(f"[auth] Logged in as: {mem}")
-    except Exception:
-        pass
+            print(f"[info] User status: {account_status}")
+    except Exception as e:
+        print(f"[warn] auth check failed: {e}")
 
     print("[info] extracting metadata…")
     data_novel = client.novel(novel_id)
@@ -51,7 +95,7 @@ def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=N
     writers = data_novel["result"].get("writer_list") or []
     author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
-    
+
     print(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")
 
     rows = max(2, int(epi_cnt)) if epi_cnt else 1000
@@ -67,4 +111,4 @@ def fetch_novel_and_episodes(client, novel_id, start_chapter=None, end_chapter=N
     if max_chapters:
         ep_list = ep_list[:int(max_chapters)]
 
-    return data_novel, ep_list, title
+    return data_novel, ep_list, title, account_status
