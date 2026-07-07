@@ -523,11 +523,12 @@ class NovelpiaClient:
     ) -> list[ChapterResult]:
         """Fetch multiple episodes in parallel."""
         results: list[ChapterResult] = [{} for _ in range(len(ep_list))]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_idx = {
-                executor.submit(self.fetch_episode, ep, i+1): i
-                for i, ep in enumerate(ep_list)
-            }
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        future_to_idx = {
+            executor.submit(self.fetch_episode, ep, i + 1): i
+            for i, ep in enumerate(ep_list)
+        }
+        try:
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
@@ -537,6 +538,13 @@ class NovelpiaClient:
                     results[idx] = {"error": str(e), "idx": idx+1}
                 if progress_cb:
                     progress_cb()
+        except KeyboardInterrupt:
+            for future in future_to_idx:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
         return results
 
 def request_with_retries(

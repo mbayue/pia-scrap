@@ -13,6 +13,7 @@ from src.api import (
     detect_premium_episode_blocked,
     request_with_retries,
 )
+from src.contracts import ChapterResult, EpisodeItem
 
 
 class FakeResponse:
@@ -161,6 +162,20 @@ def test_novelpia_client_close_closes_session(monkeypatch):
     client.close()
 
     assert closed == [True]
+
+def test_fetch_episodes_parallel_propagates_keyboard_interrupt():
+    class InterruptingClient(NovelpiaClient):
+        def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
+            raise KeyboardInterrupt
+
+    client = InterruptingClient(throttle=0)
+
+    try:
+        client.fetch_episodes_parallel([{"episode_no": 1}], max_workers=1)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("expected KeyboardInterrupt")
 
 def test_login_ignores_placeholder_userkey_cookie():
     password = "test-" + "password"
