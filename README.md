@@ -6,7 +6,7 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
-## What's New in 2.4.0
+## What's New in 2.4.1
 
 * Prints logged-in account status: `free`, `paid`, or `unknown`.
 * Handles free-account ad-gated chapters with one notice and a short wait.
