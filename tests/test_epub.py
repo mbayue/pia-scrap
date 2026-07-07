@@ -9,7 +9,9 @@ from src.export import EpubImageAdapter, ImageFetcher, write_txt_chapters
 class OkResponse:
     status_code = 200
     content = b"image-bytes"
-    headers = {}
+
+    def __init__(self, headers: dict[str, str] | None = None):
+        self.headers = headers or {}
 
     def raise_for_status(self):
         return None
@@ -106,6 +108,20 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
     assert all(not item.file_name.startswith("images/") for item in written[0].get_items())
 
 
+def test_image_fetch_requires_complete_cloudfront_signed_cookie_set():
+    client = NovelpiaClient(throttle=0)
+    fetcher = ImageFetcher()
+
+    client.s.cookies.set("CloudFront-Key-Pair-Id", "key")
+    client.s.cookies.set("CloudFront-Signature", "sig")
+
+    assert fetcher.can_fetch_chapter_images(client) is False
+
+    client.s.cookies.set("CloudFront-Policy", "policy")
+
+    assert fetcher.can_fetch_chapter_images(client) is True
+
+
 def test_build_about_page_includes_genres(monkeypatch, tmp_path):
     written = []
     novel: NovelResponse = {
@@ -183,15 +199,16 @@ def test_fetch_bytes_does_not_retry_permanent_4xx(monkeypatch, capsys):
     assert "image fetch failed" in capsys.readouterr().out
 
 
-def test_epub_image_adapter_skips_unsupported_image_extension(monkeypatch):
+def test_epub_image_adapter_derives_extension_for_unsupported_image_url(monkeypatch):
     client = NovelpiaClient(throttle=0)
-    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse({"Content-Type": "image/png"}))
     adapter = EpubImageAdapter(ImageFetcher(), client)
 
     rewritten, items = adapter.add_images_and_rewrite('<p><img src="/file.bin"></p>')
 
-    assert 'src="/file.bin"' in rewritten
-    assert items == []
+    assert 'src="images/img_00001.png"' in rewritten
+    assert len(items) == 1
+    assert items[0].file_name == "images/img_00001.png"
 
 
 def test_write_txt_chapters_exports_successful_chapter_and_skips_failed(tmp_path, capsys):

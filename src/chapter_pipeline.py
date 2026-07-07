@@ -3,6 +3,7 @@ from enum import Enum
 
 from src.chapter_cache import (
     ChapterFetchClient,
+    episode_no,
     fetch_with_account_policy,
     fetch_with_cache,
     load_failed_episode_nos,
@@ -12,16 +13,6 @@ from src.contracts import ChapterResult, EpisodeItem
 
 def assert_never(value: object) -> None:
     raise AssertionError(f"unreachable value: {value!r}")
-
-
-def episode_no(ep: EpisodeItem) -> int | None:
-    raw_episode_no = ep.get("episode_no")
-    if raw_episode_no is None:
-        return None
-    try:
-        return int(raw_episode_no)
-    except (TypeError, ValueError):
-        return None
 
 
 class AccountChapterPolicy(str, Enum):

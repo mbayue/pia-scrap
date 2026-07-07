@@ -12,6 +12,21 @@ from src.contracts import ChapterResult
 from src.helper import media_type_from_ext, normalize_url, sanitize_filename
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+IMAGE_EXTENSION_BY_MEDIA_TYPE = {
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+SIGNED_COOKIE_KEYS = {"Key-Pair-Id", "Signature"}
+SIGNED_POLICY_COOKIE_KEYS = {"Policy", "Expires"}
+
+
+def cloudfront_cookie_key(cookie_name: str) -> str | None:
+    key = cookie_name.removeprefix("CloudFront-")
+    if key in SIGNED_COOKIE_KEYS or key in SIGNED_POLICY_COOKIE_KEYS:
+        return key
+    return None
 
 
 class ImageFetcher:
@@ -27,7 +42,7 @@ class ImageFetcher:
         try:
             for cookie in client.s.cookies:
                 cookie_name = cookie.name
-                if cookie_name.startswith("CloudFront-") or cookie_name in ("Key-Pair-Id", "Policy", "Signature"):
+                if cloudfront_cookie_key(cookie_name) is not None:
                     cloudfront_parts.append(f"{cookie_name}={cookie.value}")
         except AttributeError as exc:
             if self.debug_dump:
@@ -37,9 +52,24 @@ class ImageFetcher:
         return headers
 
     def can_fetch_chapter_images(self, client: NovelpiaClient) -> bool:
-        return "Cookie" in self.fetch_headers(client)
+        keys: set[str] = set()
+        try:
+            for cookie in client.s.cookies:
+                key = cloudfront_cookie_key(cookie.name)
+                if key is not None:
+                    keys.add(key)
+        except AttributeError as exc:
+            if self.debug_dump:
+                print(f"[debug] image cookie check failed: {exc}")
+        return SIGNED_COOKIE_KEYS.issubset(keys) and bool(keys.intersection(SIGNED_POLICY_COOKIE_KEYS))
 
     def fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
+        fetched = self.fetch_image(client, url)
+        if fetched is None:
+            return None
+        return fetched[0]
+
+    def fetch_image(self, client: NovelpiaClient, url: str) -> tuple[bytes, str] | None:
         for attempt in range(1, 4):
             try:
                 resp = client.s.get(url, headers=self.fetch_headers(client), timeout=client.timeout)
@@ -47,7 +77,13 @@ class ImageFetcher:
                     time.sleep(2.0 * attempt)
                     continue
                 resp.raise_for_status()
-                return resp.content
+                media_type = str(resp.headers.get("Content-Type", "")).split(";", 1)[0].lower()
+                ext = IMAGE_EXTENSION_BY_MEDIA_TYPE.get(media_type)
+                if ext is None:
+                    ext = os.path.splitext(urlparse(url).path)[1].lower()
+                if ext not in SUPPORTED_IMAGE_EXTENSIONS:
+                    ext = ".jpg"
+                return resp.content, ext
             except requests.HTTPError as exc:
                 status_code = exc.response.status_code if exc.response is not None else 0
                 if 400 <= status_code < 500:
@@ -94,13 +130,10 @@ class EpubImageAdapter:
                 img["src"] = self.image_cache[src]
                 continue
 
-            ext = os.path.splitext(urlparse(src).path)[1].lower() or ".jpg"
-            if ext not in SUPPORTED_IMAGE_EXTENSIONS:
+            fetched = self.fetcher.fetch_image(self.client, src)
+            if fetched is None:
                 continue
-
-            img_bytes = self.fetcher.fetch_bytes(self.client, src)
-            if not img_bytes:
-                continue
+            img_bytes, ext = fetched
 
             fname = f"images/img_{self.img_index:05d}{ext}"
             self.image_cache[src] = fname

@@ -1,3 +1,5 @@
+import sys
+import unittest
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 
@@ -5,6 +7,7 @@ from src.const import config_path_for_runtime
 from src.helper import attach_auth_cookies, j, load_config, mask_kv, save_config
 
 
+@unittest.skipIf(sys.platform != "win32", "Windows frozen executable path semantics")
 def test_config_path_for_frozen_exe_lives_next_to_binary():
     exe_path = Path("C:/app/dist/pia-scrap.exe")
 
