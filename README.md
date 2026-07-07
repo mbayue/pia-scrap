@@ -57,6 +57,38 @@ pip install -r requirements.txt
 
 ---
 
+## Prebuilt Release Zips
+
+Tagged releases include:
+
+* `pia-scrap-linux.zip`
+* `pia-scrap-windows.zip`
+
+Each zip contains the executable, `README.md`, and `.env.example`. Copy `.env.example` to `.env` beside the executable to use environment variables.
+
+Linux:
+
+```bash
+./pia-scrap 49
+```
+
+Windows:
+
+```powershell
+.\pia-scrap.exe 49
+```
+
+To build the same executable locally, install PyInstaller and run:
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller --clean --noconfirm pia-scrap.spec
+```
+
+The executable is written to `dist/`.
+
+---
+
 ## CLI
 
 ```text

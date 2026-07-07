@@ -2,8 +2,10 @@ import argparse
 import base64
 import os
 import re
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,6 +23,13 @@ from src.helper import (
 )
 
 LogFn = Callable[[str], None]
+
+
+def _load_runtime_dotenv() -> None:
+    if getattr(sys, "frozen", False):
+        load_dotenv(Path(sys.executable).resolve().with_name(".env"))
+        return
+    load_dotenv()
 
 
 @dataclass
@@ -140,7 +149,7 @@ def _cookie_text_from_env() -> str | None:
     return None
 
 def create_client(options: QueueOptions) -> NovelpiaClient:
-    load_dotenv()
+    _load_runtime_dotenv()
     const.HTTP_LOG = bool(options.debug)
 
     cfg = load_config()

@@ -5,6 +5,7 @@ import requests
 from requests.cookies import RequestsCookieJar
 
 import main
+import src.runner as runner
 from src.runner import (
     CliUsageError,
     QueueOptions,
@@ -276,6 +277,32 @@ def test_create_client_prefers_cookie_text_over_email_and_config(monkeypatch):
     assert client.tokens.userkey == "cookie-user"
     assert client.tokens.tkey == "cookie-t"
     assert saved == [{"login_at": "cookie-login", "userkey": "cookie-user", "tkey": "cookie-t"}]
+
+
+def test_create_client_loads_env_next_to_frozen_executable(monkeypatch, tmp_path):
+    loaded_paths = []
+    exe_path = tmp_path / "pia-scrap.exe"
+    exe_path.touch()
+
+    monkeypatch.setattr(runner.sys, "executable", str(exe_path))
+    monkeypatch.setattr(runner.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runner, "load_dotenv", lambda dotenv_path: loaded_paths.append(dotenv_path))
+    monkeypatch.delenv("NOVELPIA_EMAIL", raising=False)
+    monkeypatch.delenv("NOVELPIA_PASSWORD", raising=False)
+    monkeypatch.delenv("NOVELPIA_COOKIE_FILE", raising=False)
+    monkeypatch.delenv("NOVELPIA_COOKIE_TEXT", raising=False)
+    monkeypatch.delenv("NOVELPIA_COOKIE_TEXT_B64", raising=False)
+    monkeypatch.setattr("src.runner.load_config", lambda: {
+        "login_at": "cfg-login",
+        "userkey": "cfg-user",
+        "tkey": "cfg-t",
+    })
+    monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
+
+    create_client(QueueOptions())
+
+    assert loaded_paths == [exe_path.with_name(".env").resolve()]
+
 
 def test_create_client_prefers_email_password_over_stored_tokens(monkeypatch):
     saved = []
