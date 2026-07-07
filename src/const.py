@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 # ----------------------------
@@ -8,7 +9,15 @@ BASE_URL = "https://global.novelpia.com"
 API_BASE = "https://api-global.novelpia.com"
 IMG_BASE_HTTPS = "https:"
 HTTP_LOG = False
-CONFIG_PATH = Path(__file__).resolve().parent.parent / ".api.json"
+
+
+def config_path_for_runtime(executable: Path, frozen: bool) -> Path:
+    if frozen:
+        return executable.resolve().with_name(".api.json")
+    return Path(__file__).resolve().parent.parent / ".api.json"
+
+
+CONFIG_PATH = config_path_for_runtime(Path(sys.executable), bool(getattr(sys, "frozen", False)))
 
 SESSION_HEADERS = {
     "accept": "application/json, text/plain, */*",

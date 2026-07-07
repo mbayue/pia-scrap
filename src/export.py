@@ -34,6 +34,9 @@ class ImageFetcher:
             headers["Cookie"] = "; ".join(cloudfront_parts)
         return headers
 
+    def can_fetch_chapter_images(self, client: NovelpiaClient) -> bool:
+        return "Cookie" in self.fetch_headers(client)
+
     def fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
         for attempt in range(1, 4):
             try:
@@ -52,15 +55,23 @@ class ImageFetcher:
 
 
 class EpubImageAdapter:
-    def __init__(self, fetcher: ImageFetcher, client: NovelpiaClient):
+    def __init__(self, fetcher: ImageFetcher, client: NovelpiaClient, embed_images: bool = True):
         self.fetcher = fetcher
         self.client = client
+        self.embed_images = embed_images
         self.image_cache: dict[str, str] = {}
         self.img_index = 1
 
     def add_images_and_rewrite(self, html_str: str) -> tuple[str, list[epub.EpubItem]]:
         soup = BeautifulSoup(html_str, "lxml")
         added_items: list[epub.EpubItem] = []
+
+        if not self.embed_images:
+            for img in soup.find_all("img"):
+                img.decompose()
+            if soup.body is None:
+                return str(soup), added_items
+            return "".join(str(child) for child in soup.body.contents), added_items
 
         for img in soup.find_all("img"):
             src_value = img.get("src")

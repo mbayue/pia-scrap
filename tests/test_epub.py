@@ -63,6 +63,34 @@ def test_build_continues_when_chapter_image_fetch_fails(monkeypatch, tmp_path):
     assert written == [str(tmp_path / "book" / "book.epub")]
 
 
+def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp_path):
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {"novel_no": 49, "novel_name": "Book", "flag_complete": 0},
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    password = "test-" + "password"
+    client = NovelpiaClient(email="user@example.com", password=password, throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image fetch")))
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
+
+    EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}],
+    )
+
+    chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
+    assert "<img" not in chapter.content
+    assert "before" in chapter.content
+    assert "after" in chapter.content
+    assert all(not item.file_name.startswith("images/") for item in written[0].get_items())
+
+
 def test_build_about_page_includes_genres(monkeypatch, tmp_path):
     written = []
     novel: NovelResponse = {

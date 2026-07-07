@@ -1,6 +1,14 @@
 from http.cookiejar import Cookie, MozillaCookieJar
+from pathlib import Path
 
+from src.const import config_path_for_runtime
 from src.helper import attach_auth_cookies, j, load_config, mask_kv, save_config
+
+
+def test_config_path_for_frozen_exe_lives_next_to_binary():
+    exe_path = Path("C:/app/dist/pia-scrap.exe")
+
+    assert config_path_for_runtime(executable=exe_path, frozen=True) == Path("C:/app/dist/.api.json")
 
 
 def test_mask_kv_masks_nested_tokens():

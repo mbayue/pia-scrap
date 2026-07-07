@@ -140,6 +140,21 @@ def test_main_merges_cli_and_queue_options(monkeypatch, tmp_path):
         password=secret,
     )
 
+def test_packaged_windows_no_args_usage_error_pauses():
+    assert main.should_pause_on_usage_error(["pia-scrap.exe"], is_frozen=True, os_name="nt") is True
+    assert main.should_pause_on_usage_error(["pia-scrap.exe", "5522"], is_frozen=True, os_name="nt") is False
+    assert main.should_pause_on_usage_error(["main.py"], is_frozen=False, os_name="nt") is False
+
+def test_packaged_windows_no_args_hint_uses_powershell_path(monkeypatch, capsys):
+    monkeypatch.setattr(main, "should_pause_on_usage_error", lambda argv, is_frozen, os_name: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+
+    main.pause_after_usage_error()
+
+    output = capsys.readouterr().out
+    assert "PowerShell: .\\pia-scrap.exe 5522" in output
+    assert "Command Prompt: pia-scrap.exe 5522" in output
+
 def test_build_queue_request_reports_missing_queue_file(tmp_path):
     missing = tmp_path / "missing.txt"
 

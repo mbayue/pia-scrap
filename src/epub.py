@@ -84,7 +84,11 @@ class EpubBuilder:
 
         spine: list[str | epub.EpubHtml] = ["nav"]
         toc: list[epub.EpubHtml] = []
-        image_adapter = EpubImageAdapter(self._image_fetcher, client)
+        image_adapter = EpubImageAdapter(
+            self._image_fetcher,
+            client,
+            embed_images=self._image_fetcher.can_fetch_chapter_images(client),
+        )
 
         if fetched_results is None:
             pbar = tqdm(total=len(episodes), desc="[info] fetching chapters", unit="chap")

@@ -1,10 +1,24 @@
 import argparse
+import os
 import sys
 
 from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
 
 
-def main():
+def should_pause_on_usage_error(argv: list[str], is_frozen: bool, os_name: str) -> bool:
+    return is_frozen and os_name == "nt" and len(argv) == 1
+
+
+def pause_after_usage_error() -> None:
+    if not should_pause_on_usage_error(sys.argv, bool(getattr(sys, "frozen", False)), os.name):
+        return
+    print("\n[info] Run with a novel_id, for example:")
+    print("  PowerShell: .\\pia-scrap.exe 5522")
+    print("  Command Prompt: pia-scrap.exe 5522")
+    input("\nPress Enter to exit...")
+
+
+def main() -> None:
     ap = argparse.ArgumentParser(description="Novelpia to EPUB packer (API)")
     ap.add_argument(
         "novel_ids", metavar="novel_id", type=int, nargs="*", help="novel_no(s), e.g., 1072 or 4565 1234 468"
@@ -52,6 +66,11 @@ def main():
     try:
         request = build_queue_request(args)
     except CliUsageError as e:
+        if should_pause_on_usage_error(sys.argv, bool(getattr(sys, "frozen", False)), os.name):
+            ap.print_usage(sys.stderr)
+            print(f"{ap.prog}: error: {e}", file=sys.stderr)
+            pause_after_usage_error()
+            sys.exit(2)
         ap.error(str(e))
 
     try:
