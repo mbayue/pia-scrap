@@ -1,7 +1,11 @@
+from typing import Literal
+
 from bs4 import BeautifulSoup
 
 from src.contracts import EpisodeItem, NovelResponse
 from src.helper import normalize_url
+
+AccountStatus = Literal["paid", "free", "unknown"]
 
 # ----------------------------
 # Novelpia Novel & Episodes Fetcher
@@ -48,7 +52,7 @@ def html_from_episode_text(raw_html: str) -> str:
 
     return str(soup)
 
-def user_subscription_status(me_response: object) -> str:
+def user_subscription_status(me_response: object) -> AccountStatus:
     if not isinstance(me_response, dict):
         return "unknown"
     result = me_response.get("result")
@@ -69,14 +73,16 @@ def user_subscription_status(me_response: object) -> str:
 
 def fetch_novel_and_episodes(
     client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None
-) -> tuple[NovelResponse, list[EpisodeItem], str]:
+) -> tuple[NovelResponse, list[EpisodeItem], str, AccountStatus]:
     # Auth check
+    account_status: AccountStatus = "unknown"
     try:
         res = client.me()
         if str(res.get("statusCode")) == "200":
+            account_status = user_subscription_status(res)
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
             print(f"[auth] Logged in as: {mem}")
-            print(f"[info] User staus: {user_subscription_status(res)}")
+            print(f"[info] User staus: {account_status}")
     except Exception as e:
         print(f"[warn] auth check failed: {e}")
 
@@ -105,4 +111,4 @@ def fetch_novel_and_episodes(
     if max_chapters:
         ep_list = ep_list[:int(max_chapters)]
 
-    return data_novel, ep_list, title
+    return data_novel, ep_list, title, account_status

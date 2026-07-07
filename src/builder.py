@@ -2,7 +2,13 @@ import json
 import os
 
 from src.chapter_cache import episode_no as _episode_no
-from src.chapter_pipeline import ChapterFetchMode, ChapterSelection, fetch_chapters, select_episodes
+from src.chapter_pipeline import (
+    AccountChapterPolicy,
+    ChapterFetchMode,
+    ChapterSelection,
+    fetch_chapters,
+    select_episodes,
+)
 from src.contracts import EpisodeItem, NovelResponse
 from src.epub import EpubBuilder
 from src.export import write_txt_chapters
@@ -23,7 +29,7 @@ def build_epub(
     retry_failed=False,
     max_workers=1,
 ):
-    data_novel, ep_list, title = fetch_novel_and_episodes(client, novel_id)
+    data_novel, ep_list, title, account_status = fetch_novel_and_episodes(client, novel_id)
     ep_list = select_episodes(ep_list, ChapterSelection(start_chapter, end_chapter, max_chapters))
 
     builder = EpubBuilder(out_dir, debug_dump=debug_dump)
@@ -35,7 +41,12 @@ def build_epub(
         client,
         book_dir,
         ep_list,
-        ChapterFetchMode(update=update, retry_failed=retry_failed, max_workers=max_workers),
+        ChapterFetchMode(
+            update=update,
+            retry_failed=retry_failed,
+            max_workers=max_workers,
+            account_policy=AccountChapterPolicy(account_status),
+        ),
     )
     if (update or retry_failed) and fetched_count == 0:
         return None, title, 0
@@ -67,7 +78,7 @@ def build_txt(
     retry_failed=False,
     max_workers=1,
 ):
-    data_novel, ep_list, title = fetch_novel_and_episodes(client, novel_id)
+    data_novel, ep_list, title, account_status = fetch_novel_and_episodes(client, novel_id)
     ep_list = select_episodes(ep_list, ChapterSelection(start_chapter, end_chapter, max_chapters))
 
     base = kebab(title)
@@ -78,7 +89,12 @@ def build_txt(
         client,
         book_dir,
         ep_list,
-        ChapterFetchMode(update=update, retry_failed=retry_failed, max_workers=max_workers),
+        ChapterFetchMode(
+            update=update,
+            retry_failed=retry_failed,
+            max_workers=max_workers,
+            account_policy=AccountChapterPolicy(account_status),
+        ),
     )
     if (update or retry_failed) and fetched_count == 0:
         return None, title, 0

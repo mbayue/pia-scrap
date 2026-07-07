@@ -6,17 +6,26 @@ from src.api import (
     AD_REWARD_WAIT_SECONDS,
     AdRewardRequired,
     ApiShapeError,
+    KnownApiBlockError,
     NovelpiaClient,
+    PremiumEpisodeBlocked,
     detect_ad_reward_required,
+    detect_premium_episode_blocked,
     request_with_retries,
 )
 
 
 class FakeResponse:
-    def __init__(self, status_code, payload, url="https://api-global.novelpia.com/test"):
+    def __init__(
+        self,
+        status_code,
+        payload,
+        url="https://api-global.novelpia.com/test",
+        reason="Internal Server Error",
+    ):
         self.status_code = status_code
         self._payload = payload
-        self.reason = "Internal Server Error"
+        self.reason = reason
         self.url = url
         self.text = str(payload)
 
@@ -240,9 +249,107 @@ def test_detect_ad_reward_required_from_failure_shape():
 
     assert reward == AdRewardRequired(novel_no=23, episode_no=2407)
 
+def test_detect_premium_episode_blocked_from_failure_shape():
+    body = {
+        "statusCode": 500,
+        "errmsg": "novel.PREMIUM_EPISODE",
+        "code": "0009",
+        "result": {
+            "name": "NOVEL_ERROR",
+            "data": {
+                "novel_no": "23",
+                "data": {
+                    "episode_no": "2408",
+                    "novel_no": "23",
+                    "epi_num": 32,
+                },
+            },
+        },
+    }
+
+    blocked = detect_premium_episode_blocked(body)
+
+    assert blocked == PremiumEpisodeBlocked(novel_no=23, episode_no=2408)
+
+def test_detect_known_blocks_ignore_malformed_or_unrelated_body():
+    malformed_premium = {"code": "0009", "errmsg": "novel.PREMIUM_EPISODE", "result": {"data": {}}}
+    malformed_ad = {"code": "0008", "errmsg": "novel.ADVERTISEMENT_EPISODE", "result": {"data": {}}}
+    unrelated = {"code": "9999", "errmsg": "novel.OTHER"}
+
+    assert detect_premium_episode_blocked(malformed_premium) is None
+    assert detect_premium_episode_blocked(unrelated) is None
+    assert detect_ad_reward_required(malformed_ad) is None
+    assert detect_ad_reward_required(unrelated) is None
+
+def test_known_api_block_error_formats_block_marker():
+    error = KnownApiBlockError(PremiumEpisodeBlocked(novel_no=23, episode_no=2408))
+
+    assert str(error) == "premium episode blocked: novel_no=23 episode_no=2408"
+
+def test_episode_ticket_classifies_ad_block_without_retrying(monkeypatch):
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    client = NovelpiaClient(throttle=0)
+    session = FakeSession([
+        FakeResponse(500, {
+            "errmsg": "novel.ADVERTISEMENT_EPISODE",
+            "code": "0008",
+            "result": {"data": {"novel_no": 23, "data": {"episode_no": 2407}}},
+        }),
+    ])
+    client.__dict__["s"] = session
+
+    try:
+        client.episode_ticket(2407)
+    except KnownApiBlockError as exc:
+        assert exc.block == AdRewardRequired(novel_no=23, episode_no=2407)
+    else:
+        raise AssertionError("expected KnownApiBlockError")
+
+    assert session.calls == 1
+
+def test_episode_ticket_classifies_premium_block_without_retrying(monkeypatch):
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    client = NovelpiaClient(throttle=0)
+    session = FakeSession([
+        FakeResponse(500, {
+            "errmsg": "novel.PREMIUM_EPISODE",
+            "code": "0009",
+            "result": {"data": {"novel_no": 23, "data": {"episode_no": 2408}}},
+        }),
+    ])
+    client.__dict__["s"] = session
+
+    try:
+        client.episode_ticket(2408)
+    except KnownApiBlockError as exc:
+        assert exc.block == PremiumEpisodeBlocked(novel_no=23, episode_no=2408)
+    else:
+        raise AssertionError("expected KnownApiBlockError")
+
+    assert session.calls == 1
+
+def test_episode_ticket_unknown_500_still_retries(monkeypatch):
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    client = NovelpiaClient(throttle=0)
+    session = FakeSession([
+        FakeResponse(500, {"errmsg": "temporary"}),
+        FakeResponse(500, {"errmsg": "temporary"}),
+        FakeResponse(500, {"errmsg": "temporary"}),
+    ])
+    client.__dict__["s"] = session
+
+    try:
+        client.episode_ticket(2409)
+    except requests.HTTPError as exc:
+        assert str(exc) == "temporary"
+    else:
+        raise AssertionError("expected HTTPError")
+
+    assert session.calls == 3
+
 def test_probe_ad_reward_unlock_waits_grants_then_retries_ticket(monkeypatch):
     sleeps = []
-    client = NovelpiaClient(throttle=0)
+    client = NovelpiaClient(throttle=1.25)
     client.tokens.login_at = "login-token"
     session = RecordingSession([
         FakeResponse(200, {"result": {"token": "reward-token"}}),
@@ -269,6 +376,42 @@ def test_probe_ad_reward_unlock_waits_grants_then_retries_ticket(monkeypatch):
     }
     assert session.requests[2]["url"].endswith("/v1/novel/episode")
     assert session.requests[2]["params"] == {"episode_no": 2407}
+
+def test_fetch_episode_retries_transient_content_403(monkeypatch):
+    sleeps = []
+    session = FakeSession([
+        FakeResponse(200, {"result": {"_t": "ticket-token"}}),
+        FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
+    ])
+    client = NovelpiaClient(throttle=0)
+    client.__dict__["s"] = session
+    monkeypatch.setattr("src.api.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    result = client.fetch_episode({"episode_no": 1, "epi_num": 1, "epi_title": "One"}, 1)
+
+    assert result.get("html")
+    assert result.get("error") is None
+    assert sleeps == [1.0]
+
+def test_fetch_episode_redacts_content_token_after_persistent_403(monkeypatch):
+    session = FakeSession([
+        FakeResponse(200, {"result": {"_t": "secret-token"}}),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token"),
+    ])
+    client = NovelpiaClient(throttle=0)
+    client.__dict__["s"] = session
+    monkeypatch.setattr("src.api.time.sleep", lambda _seconds: None)
+
+    result = client.fetch_episode({"episode_no": 1, "epi_num": 1, "epi_title": "One"}, 1)
+
+    assert "secret-token" not in str(result.get("error"))
+    assert "_t=<redacted>" in str(result.get("error"))
 
 def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):
     client = NovelpiaClient(throttle=0)

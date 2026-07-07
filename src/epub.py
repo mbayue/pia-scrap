@@ -14,6 +14,21 @@ from src.helper import ensure_dir, kebab, normalize_url
 # EPUB Builder
 # ----------------------------
 
+def _genre_names(novel: NovelResponse) -> list[str]:
+    result = novel["result"]
+    nv = result["novel"]
+    tag_items = result.get("tag_list") or nv.get("tag_list") or []
+    names: list[str] = []
+    for tag in tag_items:
+        if isinstance(tag, str):
+            names.append(tag)
+            continue
+        if isinstance(tag, dict):
+            name = tag.get("tag_name") or tag.get("name") or tag.get("title")
+            if isinstance(name, str):
+                names.append(name)
+    return list(dict.fromkeys(names))
+
 class EpubBuilder:
     def __init__(self, out_dir: str, debug_dump: bool = False):
         self.out_dir = out_dir
@@ -127,6 +142,9 @@ class EpubBuilder:
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
         meta_parts.append(f"<p><strong>Status:</strong> {html.escape(status)}</p>")
+        genres = _genre_names(novel)
+        if genres:
+            meta_parts.append(f"<p><strong>Genre:</strong> {html.escape(', '.join(genres))}</p>")
         if src_url:
             meta_parts.append(f"<p><strong>Source:</strong> <a href='{src_url}'>{src_url}</a></p>")
         if description:

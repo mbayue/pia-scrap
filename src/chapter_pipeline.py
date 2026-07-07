@@ -1,7 +1,20 @@
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import assert_never
 
-from src.chapter_cache import ChapterFetchClient, fetch_with_cache, load_failed_episode_nos
+from src.chapter_cache import (
+    ChapterFetchClient,
+    fetch_with_account_policy,
+    fetch_with_cache,
+    load_failed_episode_nos,
+)
 from src.contracts import ChapterResult, EpisodeItem
+
+
+class AccountChapterPolicy(StrEnum):
+    PAID = "paid"
+    FREE = "free"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +29,7 @@ class ChapterFetchMode:
     update: bool = False
     retry_failed: bool = False
     max_workers: int = 1
+    account_policy: AccountChapterPolicy = AccountChapterPolicy.UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,11 +70,23 @@ def fetch_chapters(
     mode: ChapterFetchMode,
 ) -> tuple[list[ChapterResult], int]:
     plan = plan_fetch(book_dir, episodes, mode)
-    return fetch_with_cache(
-        client,
-        plan.episodes,
-        book_dir,
-        use_cache=plan.use_cache,
-        force_episode_nos=plan.retry_episode_nos,
-        max_workers=plan.max_workers,
-    )
+    match mode.account_policy:
+        case AccountChapterPolicy.PAID:
+            return fetch_with_cache(
+                client,
+                plan.episodes,
+                book_dir,
+                use_cache=plan.use_cache,
+                force_episode_nos=plan.retry_episode_nos,
+                max_workers=plan.max_workers,
+            )
+        case AccountChapterPolicy.FREE | AccountChapterPolicy.UNKNOWN:
+            return fetch_with_account_policy(
+                client,
+                plan.episodes,
+                book_dir,
+                use_cache=plan.use_cache,
+                force_episode_nos=plan.retry_episode_nos,
+            )
+        case unreachable:
+            assert_never(unreachable)

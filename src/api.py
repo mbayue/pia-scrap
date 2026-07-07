@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, assert_never
 
 import requests
 
@@ -93,6 +93,26 @@ class AdRewardRequired:
     novel_no: int
     episode_no: int
 
+@dataclass(frozen=True, slots=True)
+class PremiumEpisodeBlocked:
+    novel_no: int
+    episode_no: int
+
+KnownApiBlock = AdRewardRequired | PremiumEpisodeBlocked
+
+@dataclass(frozen=True, slots=True)
+class KnownApiBlockError(Exception):
+    block: KnownApiBlock
+
+    def __str__(self) -> str:
+        match self.block:
+            case AdRewardRequired(novel_no=novel_no, episode_no=episode_no):
+                return f"ad reward required: novel_no={novel_no} episode_no={episode_no}"
+            case PremiumEpisodeBlocked(novel_no=novel_no, episode_no=episode_no):
+                return f"premium episode blocked: novel_no={novel_no} episode_no={episode_no}"
+            case unreachable:
+                assert_never(unreachable)
+
 def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
@@ -100,8 +120,8 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     return None
 
-def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | None:
-    if body.get("code") != "0008" and body.get("errmsg") != "novel.ADVERTISEMENT_EPISODE":
+def _known_block_episode_numbers(body: Mapping[str, Any], code: str, errmsg: str) -> tuple[int, int] | None:
+    if body.get("code") != code and body.get("errmsg") != errmsg:
         return None
     result = body.get("result")
     if not isinstance(result, dict):
@@ -116,7 +136,27 @@ def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | Non
     episode_no = _int_or_none(episode_data.get("episode_no"))
     if novel_no is None or episode_no is None:
         return None
+    return novel_no, episode_no
+
+def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | None:
+    numbers = _known_block_episode_numbers(body, "0008", "novel.ADVERTISEMENT_EPISODE")
+    if numbers is None:
+        return None
+    novel_no, episode_no = numbers
     return AdRewardRequired(novel_no=novel_no, episode_no=episode_no)
+
+def detect_premium_episode_blocked(body: Mapping[str, Any]) -> PremiumEpisodeBlocked | None:
+    numbers = _known_block_episode_numbers(body, "0009", "novel.PREMIUM_EPISODE")
+    if numbers is None:
+        return None
+    novel_no, episode_no = numbers
+    return PremiumEpisodeBlocked(novel_no=novel_no, episode_no=episode_no)
+
+def detect_known_api_block(body: Mapping[str, Any]) -> KnownApiBlock | None:
+    ad_reward = detect_ad_reward_required(body)
+    if ad_reward is not None:
+        return ad_reward
+    return detect_premium_episode_blocked(body)
 
 
 def _response_json_object(response: ResponseLike, label: str) -> dict[str, Any]:
@@ -218,6 +258,9 @@ def _parse_episode_content_response(response: ResponseLike) -> EpisodeContentRes
         response_body["content"] = content
     return response_body
 
+def _safe_error_message(error: Exception) -> str:
+    return _re.sub(r"([?&]_t=)[^&\s]+", r"\1<redacted>", str(error))
+
 class NovelpiaClient:
     def __init__(self, email: str | None = None, password: str | None = None,
                  proxy: str | None = None, timeout: int = 30, throttle: float = 1.25,
@@ -318,12 +361,12 @@ class NovelpiaClient:
         r.raise_for_status()
         return _parse_episode_list_response(r)
 
-    def episode_ticket(self, episode_no: int) -> dict[str, Any]:
+    def episode_ticket(self, episode_no: int, *, skip_throttle: bool = False) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/novel/episode"
         headers = merge_login_at({}, self.tokens.login_at)
         params = {"episode_no": episode_no}
         # Throttle once per chapter before the ticket/content pair.
-        if self.throttle:
+        if self.throttle and not skip_throttle:
             time.sleep(self.throttle + random.SystemRandom().uniform(0.1, 0.4))
         r = request_with_retries(
             self.s, "GET", url,
@@ -331,6 +374,7 @@ class NovelpiaClient:
             timeout=self.timeout, allow_refresh=True,
             refresh_fn=self.refresh, login_fn=self.login,
             max_retries=3,
+            known_block_fn=detect_known_api_block,
         )
         r.raise_for_status()
         return r.json()
@@ -378,18 +422,23 @@ class NovelpiaClient:
         jitter = secrets.SystemRandom().uniform(*AD_REWARD_JITTER_SECONDS)
         time.sleep(wait_seconds + jitter)
         self.grant_ad_reward(reward, token)
-        return self.episode_ticket(reward.episode_no)
+        return self.episode_ticket(reward.episode_no, skip_throttle=True)
 
     def episode_content(self, token_t: str) -> EpisodeContentResponse:
         url = f"{const.API_BASE}/v1/novel/episode/content"
-        r = request_with_retries(
-            self.s, "GET", url,
-            params={"_t": token_t},
-            timeout=self.timeout, max_retries=3,
-            allow_refresh=True, refresh_fn=self.refresh, login_fn=self.login
-        )
-        r.raise_for_status()
-        return _parse_episode_content_response(r)
+        for attempt in range(1, 4):
+            r = request_with_retries(
+                self.s, "GET", url,
+                params={"_t": token_t},
+                timeout=self.timeout, max_retries=3,
+            )
+            if r.status_code == 403 and attempt < 3:
+                print(f"[warn] content access returned 403; retrying in {RETRY_WAIT_SECONDS:.0f}s ({attempt}/3)")
+                time.sleep(RETRY_WAIT_SECONDS)
+                continue
+            r.raise_for_status()
+            return _parse_episode_content_response(r)
+        raise RuntimeError("episode content attempts exhausted")
 
     def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
         """Fetch ticket and content for a single episode."""
@@ -408,7 +457,7 @@ class NovelpiaClient:
         try:
             tdata = self.episode_ticket(epi_no)
         except Exception as e:
-            return {"error": str(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
+            return {"error": _safe_error_message(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
         token_t, direct_url = extract_t_token(tdata)
         if not token_t and not direct_url:
@@ -424,7 +473,7 @@ class NovelpiaClient:
                 r.raise_for_status()
                 cdata = r.json()
         except Exception as e:
-            return {"error": str(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
+            return {"error": _safe_error_message(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
         # 3) Extract HTML
         result_block = cdata.get("result", {})
@@ -504,6 +553,7 @@ def request_with_retries(
     allow_refresh: bool = False,
     refresh_fn: Callable[[], str | None] | None = None,
     login_fn: Callable[[], None] | None = None,
+    known_block_fn: Callable[[Mapping[str, Any]], KnownApiBlock | None] | None = None,
 ) -> Any:
     attempt = 0
     last_exc = None
@@ -551,10 +601,16 @@ def request_with_retries(
                 api_message = ""
                 try:
                     body = r.json()
-                    api_message = body.get("errmsg") or body.get("message") or ""
                 except Exception as e:
                     if const.HTTP_LOG:
                         print(f"Error occurred while reading API error message: {e}")
+                else:
+                    if isinstance(body, Mapping):
+                        if known_block_fn is not None:
+                            block = known_block_fn(body)
+                            if block is not None:
+                                raise KnownApiBlockError(block)
+                        api_message = body.get("errmsg") or body.get("message") or ""
                 if attempt >= max_retries:
                     detail = api_message or "Server error"
                     raise requests.HTTPError(detail, response=r)

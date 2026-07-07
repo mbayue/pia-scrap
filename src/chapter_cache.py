@@ -1,12 +1,16 @@
 import json
 import os
-from collections.abc import Callable, Iterable
+import re
+from collections.abc import Callable, Iterable, Mapping
 from typing import Protocol
 
 from tqdm import tqdm
 
+from src.api import AdRewardRequired, KnownApiBlockError, PremiumEpisodeBlocked
 from src.contracts import ChapterResult, EpisodeItem, FailedChapter
 from src.helper import ensure_dir
+
+BLOCK_RE = re.compile(r"^(ad reward required|premium episode blocked): novel_no=(\d+) episode_no=(\d+)$")
 
 
 class ChapterFetchClient(Protocol):
@@ -16,6 +20,10 @@ class ChapterFetchClient(Protocol):
         max_workers: int = 1,
         progress_cb: Callable[[], None] | None = None,
     ) -> list[ChapterResult]: ...
+
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult: ...
+
+    def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> Mapping[str, str]: ...
 
 
 def episode_no(ep: EpisodeItem) -> int | None:
@@ -159,6 +167,92 @@ def normalize_cache_row(ep: EpisodeItem, res: ChapterResult, pos: int) -> Chapte
         "epi_title": res.get("epi_title") or chapter_title(ep),
         "html": res.get("html") or "",
     }
+
+def known_block_from_result(res: ChapterResult) -> tuple[str, int, int] | None:
+    error = res.get("error")
+    if error is None:
+        return None
+    match = BLOCK_RE.match(error)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2)), int(match.group(3))
+
+def premium_block_from_error(error: KnownApiBlockError) -> PremiumEpisodeBlocked | None:
+    if isinstance(error.block, PremiumEpisodeBlocked):
+        return error.block
+    return None
+
+def fetch_with_account_policy(
+    client: ChapterFetchClient,
+    ep_list: list[EpisodeItem],
+    book_dir: str,
+    *,
+    use_cache: bool = False,
+    force_episode_nos: set[int] | None = None,
+) -> tuple[list[ChapterResult], int]:
+    cache = load_cache(book_dir) if use_cache else {}
+    forced_nos = force_episode_nos or set()
+    results: list[ChapterResult] = []
+    failed_rows: list[FailedChapter] = []
+    fetched_count = 0
+    ad_novel_no: int | None = None
+    ad_info_printed = False
+
+    pbar = tqdm(total=len(ep_list), desc="[info] fetching chapters", unit="chap")
+    for pos, ep in enumerate(ep_list, 1):
+        epi_no = episode_no(ep)
+        if epi_no is not None and epi_no in cache and epi_no not in forced_nos:
+            results.append({**cache[epi_no], "idx": pos})
+            pbar.update(1)
+            continue
+
+        if epi_no is not None and ad_novel_no is not None:
+            try:
+                client.probe_ad_reward_unlock(AdRewardRequired(novel_no=ad_novel_no, episode_no=epi_no))
+            except KnownApiBlockError as e:
+                if premium_block_from_error(e) is not None:
+                    print(f"[info] stopped at premium chapter: episode_no={epi_no}")
+                    break
+
+        fetched_count += 1
+        res = client.fetch_episode(ep, pos)
+        block = known_block_from_result(res)
+        if block is not None and block[0] == "premium episode blocked":
+            print(f"[info] stopped at premium chapter: episode_no={block[2]}")
+            break
+        if block is not None and block[0] == "ad reward required":
+            ad_novel_no = block[1]
+            if not ad_info_printed:
+                print("[info] ad-gated chapters detected; using rewarded access for later free chapters")
+                ad_info_printed = True
+            try:
+                client.probe_ad_reward_unlock(AdRewardRequired(novel_no=block[1], episode_no=block[2]))
+            except KnownApiBlockError as e:
+                if premium_block_from_error(e) is not None:
+                    print(f"[info] stopped at premium chapter: episode_no={block[2]}")
+                    break
+            res = client.fetch_episode(ep, pos)
+            block = known_block_from_result(res)
+            if block is not None and block[0] == "premium episode blocked":
+                print(f"[info] stopped at premium chapter: episode_no={block[2]}")
+                break
+
+        results.append(res)
+        if not res or "error" in res:
+            failed_rows.append(normalize_failed_chapter(ep, res or {}, pos))
+        elif (cache_row := normalize_cache_row(ep, res, pos)) is not None:
+            write_cache_item(book_dir, cache_row)
+        pbar.update(1)
+    pbar.close()
+
+    if failed_rows:
+        failure_path = failed_path(book_dir)
+        write_jsonl(failure_path, failed_rows)
+        print(f"[warn] Wrote failed chapter list: {failure_path}")
+    elif fetched_count and os.path.exists(failure_path := failed_path(book_dir)):
+        os.remove(failure_path)
+
+    return results, fetched_count
 
 
 def fetch_with_cache(

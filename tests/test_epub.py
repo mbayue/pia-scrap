@@ -63,6 +63,35 @@ def test_build_continues_when_chapter_image_fetch_fails(monkeypatch, tmp_path):
     assert written == [str(tmp_path / "book" / "book.epub")]
 
 
+def test_build_about_page_includes_genres(monkeypatch, tmp_path):
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {
+                "novel_no": 49,
+                "novel_name": "Book",
+                "flag_complete": 1,
+                "tag_list": [{"tag_name": "Fantasy"}, {"name": "Comedy"}, "Drama"],
+            },
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    client = _failing_client(monkeypatch)
+
+    monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda path, book, _opts: written.append((path, book)))
+
+    EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": "<p>ok</p>"}],
+    )
+
+    about = next(item for item in written[0][1].get_items() if item.file_name == "about.xhtml")
+    assert "<strong>Genre:</strong> Fantasy, Comedy, Drama" in about.content
+
 def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
     client = NovelpiaClient(throttle=0)
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())

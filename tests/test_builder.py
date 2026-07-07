@@ -1,7 +1,15 @@
 import json
 
+from src.api import AdRewardRequired, KnownApiBlockError, PremiumEpisodeBlocked
+from src.builder import build_epub, build_txt
 from src.chapter_cache import fetch_with_cache, load_cache, load_failed_episode_nos
-from src.chapter_pipeline import ChapterFetchMode, ChapterSelection, fetch_chapters, select_episodes
+from src.chapter_pipeline import (
+    AccountChapterPolicy,
+    ChapterFetchMode,
+    ChapterSelection,
+    fetch_chapters,
+    select_episodes,
+)
 from src.contracts import ChapterResult, EpisodeItem
 
 
@@ -21,6 +29,56 @@ class DummyClient:
             for _ in ep_list:
                 progress_cb()
         return self.fetched
+
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
+        self.calls.append(([ep], 1))
+        return self.fetched.pop(0)
+
+    def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> dict[str, str]:
+        self.calls.append(([{"episode_no": reward.episode_no, "reward": True}], 1))
+        return {"ok": "1"}
+
+class BuilderClient(DummyClient):
+    def __init__(self, me_response: dict[str, object], fetched: list[ChapterResult]):
+        super().__init__(fetched)
+        self.me_response = me_response
+
+    def me(self) -> dict[str, object]:
+        self.calls.append("me")
+        return self.me_response
+
+    def novel(self, novel_id: int) -> dict[str, object]:
+        self.calls.append(("novel", novel_id))
+        return {
+            "result": {
+                "novel": {"novel_no": novel_id, "novel_name": "Paid Book", "count_epi": 1},
+                "info": {"epi_cnt": 1},
+            }
+        }
+
+    def episode_list(self, novel_id: int, rows: int) -> dict[str, dict[str, list[EpisodeItem]]]:
+        self.calls.append(("episode_list", novel_id, rows))
+        return {"result": {"list": [{"episode_no": 80, "epi_num": 1, "epi_title": "Paid"}]}}
+
+class PartialBuilderClient(BuilderClient):
+    def episode_list(self, novel_id: int, rows: int) -> dict[str, dict[str, list[EpisodeItem]]]:
+        self.calls.append(("episode_list", novel_id, rows))
+        return {
+            "result": {
+                "list": [
+                    {"episode_no": 81, "epi_num": 1, "epi_title": "One"},
+                    {"episode_no": 82, "epi_num": 2, "epi_title": "Premium"},
+                    {"episode_no": 83, "epi_num": 3, "epi_title": "Later"},
+                ]
+            }
+        }
+
+class ProbePremiumClient(PartialBuilderClient):
+    def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> dict[str, str]:
+        self.calls.append(([{"episode_no": reward.episode_no, "reward": True}], 1))
+        if reward.episode_no == 82:
+            raise KnownApiBlockError(PremiumEpisodeBlocked(novel_no=reward.novel_no, episode_no=reward.episode_no))
+        return {"ok": "1"}
 
 
 def test_fetch_with_cache_uses_cache_and_fetches_missing(tmp_path):
@@ -203,3 +261,197 @@ def test_fetch_chapters_update_no_op_when_all_requested_chapters_are_cached(tmp_
     assert fetched_count == 0
     assert results[0].get("html") == "cached"
     assert client.calls == []
+
+def test_fetch_chapters_free_policy_unlocks_ads_then_stops_at_premium(tmp_path):
+    book_dir = tmp_path / "book"
+    client = DummyClient(
+        [
+            {"epi_no": 40, "html": "one", "epi_title": "One"},
+            {"error": "ad reward required: novel_no=7 episode_no=41", "epi_no": 41, "epi_title": "Ad"},
+            {"epi_no": 41, "html": "ad", "epi_title": "Ad"},
+            {"error": "premium episode blocked: novel_no=7 episode_no=42", "epi_no": 42, "epi_title": "Premium"},
+        ]
+    )
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 40, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 41, "epi_num": 2, "epi_title": "Ad"},
+        {"episode_no": 42, "epi_num": 3, "epi_title": "Premium"},
+        {"episode_no": 43, "epi_num": 4, "epi_title": "Later"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE),
+    )
+
+    assert fetched_count == 3
+    assert [row.get("html") for row in results] == ["one", "ad"]
+    assert not (book_dir / "failed_chapters.jsonl").exists()
+    assert client.calls == [
+        ([episodes[0]], 1),
+        ([episodes[1]], 1),
+        ([{"episode_no": 41, "reward": True}], 1),
+        ([episodes[1]], 1),
+        ([{"episode_no": 42, "reward": True}], 1),
+        ([episodes[2]], 1),
+    ]
+
+def test_fetch_chapters_free_policy_logs_ad_gated_info_once(tmp_path, capsys):
+    book_dir = tmp_path / "book"
+    client = DummyClient(
+        [
+            {"error": "ad reward required: novel_no=7 episode_no=41", "epi_no": 41, "epi_title": "Ad"},
+            {"epi_no": 41, "html": "ad", "epi_title": "Ad"},
+            {"epi_no": 42, "html": "next", "epi_title": "Next"},
+        ]
+    )
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 41, "epi_num": 1, "epi_title": "Ad"},
+        {"episode_no": 42, "epi_num": 2, "epi_title": "Next"},
+    ]
+
+    fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE),
+    )
+
+    out = capsys.readouterr().out
+    assert out.count("ad-gated chapters detected") == 1
+
+def test_fetch_chapters_paid_policy_keeps_parallel_path_without_reward(tmp_path):
+    book_dir = tmp_path / "book"
+    client = DummyClient([{"epi_no": 50, "html": "paid", "epi_title": "Paid"}])
+    episodes: list[EpisodeItem] = [{"episode_no": 50, "epi_num": 1, "epi_title": "Paid"}]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.PAID, max_workers=3),
+    )
+
+    assert fetched_count == 1
+    assert results[0].get("html") == "paid"
+    assert client.calls == [(episodes, 3)]
+
+def test_fetch_chapters_free_policy_treats_malformed_block_as_normal_failure(tmp_path):
+    book_dir = tmp_path / "book"
+    client = DummyClient(
+        [
+            {"error": "ad reward required", "epi_no": 70, "epi_title": "Bad"},
+            {"epi_no": 71, "html": "next", "epi_title": "Next"},
+        ]
+    )
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 70, "epi_num": 1, "epi_title": "Bad"},
+        {"episode_no": 71, "epi_num": 2, "epi_title": "Next"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE),
+    )
+
+    failed_rows = [json.loads(line) for line in (book_dir / "failed_chapters.jsonl").read_text().splitlines()]
+    assert fetched_count == 2
+    assert results[0].get("error") == "ad reward required"
+    assert results[1].get("html") == "next"
+    assert failed_rows[0]["epi_no"] == 70
+    assert client.calls == [([episodes[0]], 1), ([episodes[1]], 1)]
+
+def test_build_txt_uses_paid_account_status_for_parallel_fetch_without_reward(tmp_path):
+    client = BuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Paid", "mem_plus_type": "1"}}},
+        [{"epi_no": 80, "html": "paid", "epi_title": "Paid"}],
+    )
+
+    book_dir, title, total = build_txt(client, 7, str(tmp_path), max_workers=4)
+
+    assert total == 1
+    assert title == "Paid Book"
+    assert book_dir == str(tmp_path / "paid-book")
+    assert ([{"episode_no": 80, "epi_num": 1, "epi_title": "Paid"}], 4) in client.calls
+    assert ([{"episode_no": 80, "reward": True}], 1) not in client.calls
+
+def test_build_txt_uses_free_account_status_for_reward_flow(tmp_path):
+    client = BuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [
+            {"error": "ad reward required: novel_no=7 episode_no=80", "epi_no": 80, "epi_title": "Ad"},
+            {"epi_no": 80, "html": "ad", "epi_title": "Ad"},
+        ],
+    )
+
+    _book_dir, _title, total = build_txt(client, 7, str(tmp_path), max_workers=4)
+
+    assert total == 1
+    assert ([{"episode_no": 80, "reward": True}], 1) in client.calls
+
+def test_build_txt_preserves_partial_output_after_premium_stop(tmp_path):
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [
+            {"epi_no": 81, "html": "<p>one</p>", "epi_title": "One"},
+            {"error": "premium episode blocked: novel_no=7 episode_no=82", "epi_no": 82, "epi_title": "Premium"},
+        ],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path))
+
+    output_dir = tmp_path / "paid-book"
+    assert total == 1
+    assert book_dir == str(output_dir)
+    assert (output_dir / "1_One.txt").read_text(encoding="utf-8") == "one"
+    assert not (output_dir / "2_Premium.txt").exists()
+    assert not (output_dir / "failed_chapters.jsonl").exists()
+    assert json.loads((output_dir / ".cache" / "81.json").read_text(encoding="utf-8")) == {
+        "idx": 1,
+        "epi_no": 81,
+        "epi_title": "One",
+        "html": "<p>one</p>",
+    }
+
+def test_build_txt_preserves_partial_output_when_reward_probe_hits_premium(tmp_path):
+    client = ProbePremiumClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [
+            {"error": "ad reward required: novel_no=7 episode_no=81", "epi_no": 81, "epi_title": "One"},
+            {"epi_no": 81, "html": "<p>one</p>", "epi_title": "One"},
+        ],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path))
+
+    output_dir = tmp_path / "paid-book"
+    assert total == 1
+    assert book_dir == str(output_dir)
+    assert (output_dir / "1_One.txt").read_text(encoding="utf-8") == "one"
+    assert not (output_dir / "2_Premium.txt").exists()
+    assert not (output_dir / "failed_chapters.jsonl").exists()
+    assert ([{"episode_no": 82, "reward": True}], 1) in client.calls
+
+def test_build_epub_preserves_partial_output_after_premium_stop(monkeypatch, tmp_path):
+    written = []
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [
+            {"epi_no": 81, "html": "<p>one</p>", "epi_title": "One"},
+            {"error": "premium episode blocked: novel_no=7 episode_no=82", "epi_no": 82, "epi_title": "Premium"},
+        ],
+    )
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda path, _book, _opts: written.append(path))
+
+    out_path, _title, total = build_epub(client, 7, str(tmp_path))
+
+    output_dir = tmp_path / "paid-book"
+    assert total == 1
+    assert out_path == str(output_dir / "paid-book.epub")
+    assert written == [str(output_dir / "paid-book.epub")]
+    assert not (output_dir / "failed_chapters.jsonl").exists()
+    assert json.loads((output_dir / ".cache" / "81.json").read_text(encoding="utf-8"))["html"] == "<p>one</p>"
