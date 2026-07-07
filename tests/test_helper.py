@@ -37,6 +37,15 @@ def test_load_config_returns_empty_on_malformed_json(monkeypatch, tmp_path):
 
     assert load_config() == {}
 
+
+def test_load_config_returns_empty_on_non_utf8(monkeypatch, tmp_path):
+    config_path = tmp_path / ".api.json"
+    config_path.write_bytes(b"\xff")
+    monkeypatch.setattr("src.helper.CONFIG_PATH", str(config_path))
+
+    assert load_config() == {}
+
+
 def test_attach_auth_cookies_preserves_existing_cookie_header():
     class Session:
         def __init__(self):

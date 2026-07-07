@@ -2,7 +2,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Iterable, Mapping
-from typing import Protocol
+from typing import Any, Protocol
 
 from tqdm import tqdm
 
@@ -21,7 +21,9 @@ class ChapterFetchClient(Protocol):
         progress_cb: Callable[[], None] | None = None,
     ) -> list[ChapterResult]: ...
 
-    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult: ...
+    def fetch_episode(
+        self, ep: EpisodeItem, idx: int = 0, ticket_data: Mapping[str, Any] | None = None
+    ) -> ChapterResult: ...
 
     def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> Mapping[str, str]: ...
 
@@ -80,7 +82,7 @@ def load_jsonl(path: str) -> list[FailedChapter]:
                             "error": str(row.get("error") or ""),
                         }
                     )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 continue
     return rows
 
@@ -208,11 +210,30 @@ def fetch_with_account_policy(
 
         if epi_no is not None and ad_novel_no is not None:
             try:
-                client.probe_ad_reward_unlock(AdRewardRequired(novel_no=ad_novel_no, episode_no=epi_no))
+                ticket_data = client.probe_ad_reward_unlock(AdRewardRequired(novel_no=ad_novel_no, episode_no=epi_no))
             except KnownApiBlockError as e:
                 if premium_block_from_error(e) is not None:
                     print(f"[info] stopped at premium chapter: episode_no={epi_no}")
                     break
+                res: ChapterResult = {"error": str(e), "epi_no": epi_no, "epi_title": chapter_title(ep), "idx": pos}
+                results.append(res)
+                failed_rows.append(normalize_failed_chapter(ep, res, pos))
+                pbar.update(1)
+                continue
+            else:
+                fetched_count += 1
+                res = client.fetch_episode(ep, pos, ticket_data=ticket_data)
+                block = known_block_from_result(res)
+                if block is not None and block[0] == "premium episode blocked":
+                    print(f"[info] stopped at premium chapter: episode_no={block[2]}")
+                    break
+                results.append(res)
+                if not res or "error" in res:
+                    failed_rows.append(normalize_failed_chapter(ep, res or {}, pos))
+                elif (cache_row := normalize_cache_row(ep, res, pos)) is not None:
+                    write_cache_item(book_dir, cache_row)
+                pbar.update(1)
+                continue
 
         fetched_count += 1
         res = client.fetch_episode(ep, pos)
@@ -226,12 +247,17 @@ def fetch_with_account_policy(
                 print("[info] ad-gated chapters detected; using rewarded access for later free chapters")
                 ad_info_printed = True
             try:
-                client.probe_ad_reward_unlock(AdRewardRequired(novel_no=block[1], episode_no=block[2]))
+                ticket_data = client.probe_ad_reward_unlock(AdRewardRequired(novel_no=block[1], episode_no=block[2]))
             except KnownApiBlockError as e:
                 if premium_block_from_error(e) is not None:
                     print(f"[info] stopped at premium chapter: episode_no={block[2]}")
                     break
-            res = client.fetch_episode(ep, pos)
+                res = {"error": str(e), "epi_no": block[2], "epi_title": chapter_title(ep), "idx": pos}
+                results.append(res)
+                failed_rows.append(normalize_failed_chapter(ep, res, pos))
+                pbar.update(1)
+                continue
+            res = client.fetch_episode(ep, pos, ticket_data=ticket_data)
             block = known_block_from_result(res)
             if block is not None and block[0] == "premium episode blocked":
                 print(f"[info] stopped at premium chapter: episode_no={block[2]}")

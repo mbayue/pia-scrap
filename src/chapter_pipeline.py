@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import assert_never
+from enum import Enum
 
 from src.chapter_cache import (
     ChapterFetchClient,
@@ -11,7 +10,11 @@ from src.chapter_cache import (
 from src.contracts import ChapterResult, EpisodeItem
 
 
-class AccountChapterPolicy(StrEnum):
+def assert_never(value: object) -> None:
+    raise AssertionError(f"unreachable value: {value!r}")
+
+
+class AccountChapterPolicy(str, Enum):
     PAID = "paid"
     FREE = "free"
     UNKNOWN = "unknown"

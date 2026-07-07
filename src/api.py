@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Final, Protocol, assert_never
+from typing import Any, Final, Protocol
 
 import requests
 
@@ -99,6 +99,11 @@ class PremiumEpisodeBlocked:
     episode_no: int
 
 KnownApiBlock = AdRewardRequired | PremiumEpisodeBlocked
+
+
+def assert_never(value: object) -> None:
+    raise AssertionError(f"unreachable value: {value!r}")
+
 
 @dataclass(frozen=True, slots=True)
 class KnownApiBlockError(Exception):
@@ -440,7 +445,9 @@ class NovelpiaClient:
             return _parse_episode_content_response(r)
         raise RuntimeError("episode content attempts exhausted")
 
-    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
+    def fetch_episode(
+        self, ep: EpisodeItem, idx: int = 0, ticket_data: Mapping[str, Any] | None = None
+    ) -> ChapterResult:
         """Fetch ticket and content for a single episode."""
         episode_no = ep.get("episode_no")
         if episode_no is None:
@@ -455,7 +462,7 @@ class NovelpiaClient:
 
         # 1) Ticket
         try:
-            tdata = self.episode_ticket(epi_no)
+            tdata = ticket_data if ticket_data is not None else self.episode_ticket(epi_no)
         except Exception as e:
             return {"error": _safe_error_message(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
@@ -528,6 +535,7 @@ class NovelpiaClient:
             executor.submit(self.fetch_episode, ep, i + 1): i
             for i, ep in enumerate(ep_list)
         }
+        shutdown_done = False
         try:
             for future in concurrent.futures.as_completed(future_to_idx):
                 idx = future_to_idx[future]
@@ -542,9 +550,14 @@ class NovelpiaClient:
             for future in future_to_idx:
                 future.cancel()
             executor.shutdown(wait=False, cancel_futures=True)
+            shutdown_done = True
             raise
         else:
             executor.shutdown(wait=True)
+            shutdown_done = True
+        finally:
+            if not shutdown_done:
+                executor.shutdown(wait=False, cancel_futures=True)
         return results
 
 def request_with_retries(
@@ -598,7 +611,7 @@ def request_with_retries(
 
             r = session.request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
 
-            if r.status_code == 500:
+            if r.status_code >= 500:
                 if const.HTTP_LOG:
                     print(f"[api]   <- {r.status_code} {r.reason} from {r.url}")
                     try:
@@ -614,7 +627,7 @@ def request_with_retries(
                         print(f"Error occurred while reading API error message: {e}")
                 else:
                     if isinstance(body, Mapping):
-                        if known_block_fn is not None:
+                        if r.status_code == 500 and known_block_fn is not None:
                             block = known_block_fn(body)
                             if block is not None:
                                 raise KnownApiBlockError(block)

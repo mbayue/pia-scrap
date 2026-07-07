@@ -30,13 +30,13 @@ class DummyClient:
                 progress_cb()
         return self.fetched
 
-    def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
-        self.calls.append(([ep], 1))
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
+        self.calls.append(([ep], 1, ticket_data))
         return self.fetched.pop(0)
 
     def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> dict[str, str]:
         self.calls.append(([{"episode_no": reward.episode_no, "reward": True}], 1))
-        return {"ok": "1"}
+        return {"ticket": str(reward.episode_no)}
 
 class BuilderClient(DummyClient):
     def __init__(self, me_response: dict[str, object], fetched: list[ChapterResult]):
@@ -191,6 +191,18 @@ def test_load_failed_episode_nos_skips_malformed_jsonl(tmp_path):
     assert load_failed_episode_nos(str(book_dir)) == {50}
 
 
+def test_load_failed_episode_nos_skips_bad_epi_no(tmp_path):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    (book_dir / "failed_chapters.jsonl").write_text(
+        '{"idx": 1, "epi_no": "bad", "title": "T", "url": "u", "error": "e"}\n'
+        '{"idx": 2, "epi_no": 51, "title": "T", "url": "u", "error": "e"}\n',
+        encoding="utf-8",
+    )
+
+    assert load_failed_episode_nos(str(book_dir)) == {51}
+
+
 def test_select_episodes_applies_start_end_then_max():
     episodes: list[EpisodeItem] = [
         {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
@@ -237,7 +249,7 @@ def test_fetch_chapters_retry_failed_refetches_only_failed_cache_row(tmp_path):
 
     assert fetched_count == 1
     assert results[0].get("html") == "retried"
-    assert client.calls == [(episodes, 1)]
+    assert client.calls == [(episodes, 1, None)]
 
 
 def test_fetch_chapters_update_no_op_when_all_requested_chapters_are_cached(tmp_path):
@@ -290,12 +302,12 @@ def test_fetch_chapters_free_policy_unlocks_ads_then_stops_at_premium(tmp_path):
     assert [row.get("html") for row in results] == ["one", "ad"]
     assert not (book_dir / "failed_chapters.jsonl").exists()
     assert client.calls == [
-        ([episodes[0]], 1),
-        ([episodes[1]], 1),
+        ([episodes[0]], 1, None),
+        ([episodes[1]], 1, None),
         ([{"episode_no": 41, "reward": True}], 1),
-        ([episodes[1]], 1),
+        ([episodes[1]], 1, {"ticket": "41"}),
         ([{"episode_no": 42, "reward": True}], 1),
-        ([episodes[2]], 1),
+        ([episodes[2]], 1, {"ticket": "42"}),
     ]
 
 def test_fetch_chapters_free_policy_logs_ad_gated_info_once(tmp_path, capsys):
@@ -363,7 +375,7 @@ def test_fetch_chapters_free_policy_treats_malformed_block_as_normal_failure(tmp
     assert results[0].get("error") == "ad reward required"
     assert results[1].get("html") == "next"
     assert failed_rows[0]["epi_no"] == 70
-    assert client.calls == [([episodes[0]], 1), ([episodes[1]], 1)]
+    assert client.calls == [([episodes[0]], 1, None), ([episodes[1]], 1, None)]
 
 def test_build_txt_uses_paid_account_status_for_parallel_fetch_without_reward(tmp_path):
     client = BuilderClient(
@@ -410,6 +422,9 @@ def test_build_txt_preserves_partial_output_after_premium_stop(tmp_path):
     assert (output_dir / "1_One.txt").read_text(encoding="utf-8") == "one"
     assert not (output_dir / "2_Premium.txt").exists()
     assert not (output_dir / "failed_chapters.jsonl").exists()
+    chapters = [json.loads(line) for line in (output_dir / "chapters.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert chapters == [{"idx": 1, "title": "One", "url": "https://global.novelpia.com/viewer/81"}]
+    assert json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))["chapter"] == 1
     assert json.loads((output_dir / ".cache" / "81.json").read_text(encoding="utf-8")) == {
         "idx": 1,
         "epi_no": 81,
@@ -454,4 +469,7 @@ def test_build_epub_preserves_partial_output_after_premium_stop(monkeypatch, tmp
     assert out_path == str(output_dir / "paid-book.epub")
     assert written == [str(output_dir / "paid-book.epub")]
     assert not (output_dir / "failed_chapters.jsonl").exists()
+    chapters = [json.loads(line) for line in (output_dir / "chapters.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert chapters == [{"idx": 1, "title": "One", "url": "https://global.novelpia.com/viewer/81"}]
+    assert json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))["chapter"] == 1
     assert json.loads((output_dir / ".cache" / "81.json").read_text(encoding="utf-8"))["html"] == "<p>one</p>"

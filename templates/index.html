@@ -539,7 +539,7 @@ function rememberDownloadedJob(jobId) {
 }
 
 function autoDownloadResults(job) {
-  if (!job.id || job.status !== "done" || loadDownloadedJobs().includes(job.id)) return;
+  if (!job.id || !["done", "failed"].includes(job.status) || loadDownloadedJobs().includes(job.id)) return;
   const epubRows = (job.rows || [])
     .map((row, index) => ({row, index}))
     .filter(({row}) => row.path && row.status === "epub");

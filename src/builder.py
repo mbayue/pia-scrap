@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Sequence
 
 from src.chapter_cache import episode_no as _episode_no
 from src.chapter_pipeline import (
@@ -9,7 +10,7 @@ from src.chapter_pipeline import (
     fetch_chapters,
     select_episodes,
 )
-from src.contracts import EpisodeItem, NovelResponse
+from src.contracts import ChapterResult, EpisodeItem, NovelResponse
 from src.epub import EpubBuilder
 from src.export import write_txt_chapters
 from src.helper import ensure_dir, kebab
@@ -51,12 +52,13 @@ def build_epub(
     if (update or retry_failed) and fetched_count == 0:
         return None, title, 0
 
-    build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)
+    completed_ep_list = completed_episodes(ep_list, fetched_results)
+    build_metadata(book_dir, data_novel, novel_id, completed_ep_list)
 
     return builder.build(
         client=client,
         novel=data_novel,
-        episodes=ep_list,
+        episodes=completed_ep_list,
         filename_hint=title,
         language=language,
         novel_id=novel_id,
@@ -101,16 +103,26 @@ def build_txt(
 
     total = write_txt_chapters(book_dir, fetched_results)
 
-    build_metadata(book_dir, data_novel, novel_id, ep_list, max_chapters)
+    build_metadata(book_dir, data_novel, novel_id, completed_episodes(ep_list, fetched_results))
 
     return book_dir, title, total
+
+
+def completed_episodes(ep_list: list[EpisodeItem], fetched_results: Sequence[ChapterResult]) -> list[EpisodeItem]:
+    completed_nos: set[int] = set()
+    for row in fetched_results:
+        row_epi_no = row.get("epi_no")
+        if row and "error" not in row and row_epi_no is not None and row.get("html"):
+            completed_nos.add(int(row_epi_no))
+    if not completed_nos:
+        return []
+    return [ep for ep in ep_list if (epi_no := _episode_no(ep)) is not None and epi_no in completed_nos]
 
 
 def build_metadata(book_dir, data_novel: NovelResponse, novel_id, ep_list: list[EpisodeItem], max_chapters=None):
     result = data_novel["result"]
     nv = result["novel"]
     title = nv.get("novel_name", f"novel_{nv.get('novel_no', '')}")
-    epi_cnt = result.get("info", {}).get("epi_cnt") or nv.get("count_epi") or 0
     writers = result.get("writer_list") or []
     author = writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author"
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
@@ -138,7 +150,7 @@ def build_metadata(book_dir, data_novel: NovelResponse, novel_id, ep_list: list[
         "title": nv.get("novel_name") or title,
         "author": author,
         "tags": uniq_tags,
-        "chapter": len(ep_list) if (max_chapters and max_chapters > 0) else (int(epi_cnt) if epi_cnt else len(ep_list)),
+        "chapter": len(ep_list),
         "status": status,
         "description": description,
     }

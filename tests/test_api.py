@@ -78,6 +78,19 @@ def test_request_with_retries_retries_http_500_then_returns_success(monkeypatch,
     assert "[warn] Too many requests. Please try again later. retrying in 1s (1/3)" in capsys.readouterr().out
 
 
+def test_request_with_retries_retries_502(monkeypatch):
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    session = FakeSession([
+        FakeResponse(502, {"errmsg": "bad gateway"}, reason="Bad Gateway"),
+        FakeResponse(200, {"result": "ok"}),
+    ])
+
+    response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
+
+    assert session.calls == 2
+    assert response.status_code == 200
+
+
 def test_request_with_retries_raises_concise_api_message_after_final_500(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
     session = FakeSession([
@@ -165,7 +178,7 @@ def test_novelpia_client_close_closes_session(monkeypatch):
 
 def test_fetch_episodes_parallel_propagates_keyboard_interrupt():
     class InterruptingClient(NovelpiaClient):
-        def fetch_episode(self, ep: EpisodeItem, idx: int = 0) -> ChapterResult:
+        def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
             raise KeyboardInterrupt
 
     client = InterruptingClient(throttle=0)

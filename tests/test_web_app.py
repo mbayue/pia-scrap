@@ -60,7 +60,22 @@ def test_create_job_and_get_job_without_starting_worker(monkeypatch):
 
     assert job["status"] == "queued"
     assert job["rows"] == []
+    assert job["novel_ids"] == [5522]
     with jobs_lock:
+        jobs.clear()
+
+
+def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
+    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    with jobs_lock:
+        jobs.clear()
+
+    first = create_job(JobRequest(novel_text="5522"))
+    second = create_job(JobRequest(novel_text="https://global.novelpia.com/novel/5522"))
+
+    assert second == first
+    with jobs_lock:
+        assert len(jobs) == 1
         jobs.clear()
 
 

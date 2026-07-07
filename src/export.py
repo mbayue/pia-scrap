@@ -92,7 +92,9 @@ class EpubImageAdapter:
             added_items.append(item)
             img["src"] = fname
 
-        return str(soup), added_items
+        if soup.body is None:
+            return str(soup), added_items
+        return "".join(str(child) for child in soup.body.contents), added_items
 
 
 def write_txt_chapters(book_dir: str, fetched_results: list[ChapterResult]) -> int:

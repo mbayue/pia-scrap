@@ -217,7 +217,7 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 
 ```text
 [auth] Logged in as: FoggyRam2237
-[info] User staus: free
+[info] User status: free
 [info] extracting metadata…
 [info] title='The Reborn Calico Princess: Dancing with the System' author='Tata' chapter=2 status=Ongoing
 [info] fetching chapters: 100%|█████████████████████████████████████████████████████████████████████████| 2/2 [00:03<00:00,  1.82s/chap]

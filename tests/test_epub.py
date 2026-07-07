@@ -105,6 +105,18 @@ def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
     assert items[0].content == b"image-bytes"
 
 
+def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypatch):
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
+    adapter = EpubImageAdapter(ImageFetcher(), client)
+
+    rewritten, _items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
+
+    assert "<html" not in rewritten
+    assert "<body" not in rewritten
+    assert rewritten.startswith("<p>")
+
+
 def test_epub_image_adapter_preserves_external_image_when_fetch_fails(monkeypatch):
     monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
     adapter = EpubImageAdapter(ImageFetcher(), _failing_client(monkeypatch))

@@ -373,6 +373,23 @@ def test_create_client_rejects_cookie_auth_without_userkey(monkeypatch):
     else:
         raise AssertionError("expected RuntimeError")
 
+
+def test_create_client_rejects_cookie_auth_placeholder_userkey(monkeypatch):
+    jar = RequestsCookieJar()
+    jar.set("USERKEY", "login-user")
+    monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
+    monkeypatch.setattr("src.runner.load_config", lambda: {})
+    monkeypatch.setattr("src.runner.load_netscape_cookies_text", lambda _text: jar)
+    monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
+
+    try:
+        create_client(QueueOptions(cookie_text="cookies"))
+    except RuntimeError as exc:
+        assert "Netscape cookie file did not contain USERKEY" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
 def test_create_client_raises_without_credentials_or_tokens(monkeypatch):
     monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
     monkeypatch.delenv("NOVELPIA_EMAIL", raising=False)

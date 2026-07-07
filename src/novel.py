@@ -82,7 +82,7 @@ def fetch_novel_and_episodes(
             account_status = user_subscription_status(res)
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
             print(f"[auth] Logged in as: {mem}")
-            print(f"[info] User staus: {account_status}")
+            print(f"[info] User status: {account_status}")
     except Exception as e:
         print(f"[warn] auth check failed: {e}")
 

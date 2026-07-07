@@ -167,15 +167,15 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
             jar = load_netscape_cookies(cookie_path)
         else:
             raise RuntimeError("cookie_text or cookie_file required")
-        client.s.cookies.update(jar)
-        auth = cookie_auth_from_jar(client.s.cookies, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
+        auth = cookie_auth_from_jar(jar, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
         client.tokens.userkey = auth.userkey
         client.tokens.tkey = auth.tkey
         client.tokens.login_at = auth.login_at
-        if not auth.userkey:
+        if not auth.userkey or is_placeholder_userkey(auth.userkey):
             raise RuntimeError(
                 "Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again."
             )
+        client.s.cookies.update(jar)
         save_config({
             "login_at": auth.login_at or "",
             "userkey": auth.userkey,
