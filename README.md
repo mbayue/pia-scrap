@@ -205,27 +205,6 @@ NOVELPIA_COOKIE_TEXT_B64=
 
 A template is provided in `.env.example`.
 
-### Docker
-
-Build and run the production web server:
-
-```bash
-docker build -t pia-scrap .
-docker run --rm -p 8000:8000 -v ./output:/app/output pia-scrap
-```
-
-Bind Docker to localhost unless you have added external auth:
-
-```bash
-docker run --rm -p 127.0.0.1:8000:8000 -v ./output:/app/output pia-scrap
-```
-
-With environment variables:
-
-```bash
-docker run --rm -p 8000:8000 --env-file .env -v ./output:/app/output pia-scrap
-```
-
 ---
 
 ## Output Details
