@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pia-scrap"
-version = "2.4.1"
+version = "2.4.2"
 description = "Novelpia scraper & EPUB converter — API-based novel downloader"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -104,6 +104,9 @@ exclude = [
     "build",
     "dist",
     "output",
+    ".venv-build",
+    "**/node_modules",
+    "**/.*"
 ]
 
 [tool.pytest.ini_options]
