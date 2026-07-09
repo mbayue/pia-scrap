@@ -1,8 +1,10 @@
+import contextvars
 import os
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime
-from typing import Final, NotRequired, TypedDict
+from typing import Any, Final, NotRequired, TypedDict
 
 from src import chapter_cache as chapter_cache_module
 from src import epub as epub_module
@@ -11,6 +13,14 @@ from src.runner import QueueOptions, parse_queue_lines, run_queue
 
 MAX_STORED_JOBS: Final = 50
 ACTIVE_JOB_STATUSES: Final = {"queued", "running"}
+
+# Per-thread handle to the active job id. Lets each web job route tqdm progress
+# into its own logs without monkey-patching module-level `tqdm` (which is
+# process-global and corrupts concurrent jobs). The CLI never sets a sink, so
+# calls fall through to the real tqdm.
+_active_progress: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "active_progress", default=None
+)
 
 
 class JobState(TypedDict):
@@ -73,9 +83,26 @@ class JobProgress:
         replace_or_append_log(self.job_id, message)
 
 
+def _make_thread_local_tqdm(base_tqdm: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a module's real `tqdm` so web jobs route progress to their own sink.
+
+    When a job id is active for the current thread, tqdm-style calls build a
+    JobProgress bound to that job id (with the same args/kwargs tqdm would take,
+    preserving desc/total/unit); otherwise they pass through to the real tqdm.
+    This keeps progress per-job and avoids mutating shared module state.
+    """
+
+    def _tqdm(*args: Any, **kwargs: Any) -> Any:
+        job_id = _active_progress.get()
+        if job_id is not None:
+            return JobProgress(job_id, *args, **kwargs)
+        return base_tqdm(*args, **kwargs)
+
+    return _tqdm
+
+
 jobs: dict[str, JobState] = {}
 jobs_lock = threading.Lock()
-progress_patch_lock = threading.Lock()
 
 
 def append_log(job_id: str, message: str) -> None:
@@ -105,25 +132,28 @@ def prune_finished_jobs_locked() -> None:
         jobs.pop(job_id, None)
 
 
+# Install per-thread tqdm dispatchers once at import. These route progress to the
+# active job's sink (set per-thread inside run_job) and fall through to the real
+# tqdm otherwise. Replacing module-level `tqdm` here is safe: it happens a single
+# time at import, never from a request path, so concurrent jobs don't clobber it.
+epub_module.tqdm = _make_thread_local_tqdm(epub_module.tqdm)
+chapter_cache_module.tqdm = _make_thread_local_tqdm(chapter_cache_module.tqdm)
+
+
 def run_job(job_id: str, novel_ids: list[int], options: QueueOptions) -> None:
     with jobs_lock:
         jobs[job_id]["status"] = "running"
         jobs[job_id]["started_at"] = datetime.now().isoformat(timespec="seconds")
 
     try:
-        with progress_patch_lock:
-            original_epub_tqdm = epub_module.tqdm
-            original_chapter_cache_tqdm = chapter_cache_module.tqdm
-            def progress_factory(*args, **kwargs):
-                return JobProgress(job_id, *args, **kwargs)
-
-            epub_module.tqdm = progress_factory
-            chapter_cache_module.tqdm = progress_factory
-            try:
-                result = run_queue(novel_ids, options, log=lambda msg: append_log(job_id, msg))
-            finally:
-                epub_module.tqdm = original_epub_tqdm
-                chapter_cache_module.tqdm = original_chapter_cache_tqdm
+        # Bind this job's id to the current thread. Because the tqdm wrappers
+        # above read _active_progress per-call, concurrent jobs running on other
+        # threads keep their own sinks (no shared module-state mutation).
+        sink_token = _active_progress.set(job_id)
+        try:
+            result = run_queue(novel_ids, options, log=lambda msg: append_log(job_id, msg))
+        finally:
+            _active_progress.reset(sink_token)
         with jobs_lock:
             jobs[job_id]["status"] = "failed" if result["failures"] else "done"
             jobs[job_id]["rows"] = result["rows"]

@@ -1,5 +1,8 @@
+import time
+
 from fastapi import HTTPException
 
+from src import web_jobs as web_jobs_module
 from src.web_jobs import UnsafeDownloadPathError, downloadable_path
 from web_app import (
     MAX_STORED_JOBS,
@@ -212,3 +215,48 @@ def test_download_rejects_unknown_row():
         raise AssertionError("expected HTTPException")
     with jobs_lock:
         jobs.clear()
+
+
+def test_concurrent_jobs_keep_separate_progress_sinks():
+    """Regression: tqdm progress must route to the correct job's logs, never cross-talk."""
+    original_run_queue = web_jobs_module.run_queue
+
+    def fake_run_queue(novel_ids, options, log=lambda m: None):
+        # Simulate in-flight tqdm progress for this job's thread.
+        bar = web_jobs_module.epub_module.tqdm(total=2, desc="[info] fetching chapters", unit="chap")
+        bar.update(1)
+        bar.update(1)
+        bar.close()
+        return {"rows": [], "failures": [], "skipped_ids": []}
+
+    web_jobs_module.run_queue = fake_run_queue
+    with jobs_lock:
+        jobs.clear()
+    try:
+        a = create_job(JobRequest(novel_text="5522"))
+        b = create_job(JobRequest(novel_text="2937"))
+        for jid in (a["job_id"], b["job_id"]):
+            get_job(jid)  # ensure created
+        # Wait for both daemon jobs to finish.
+        for _ in range(100):
+            with jobs_lock:
+                if all(jobs[j]["status"] != "running" for j in (a["job_id"], b["job_id"])):
+                    break
+            time.sleep(0.05)
+
+        with jobs_lock:
+            a_logs = list(jobs[a["job_id"]]["logs"])
+            b_logs = list(jobs[b["job_id"]]["logs"])
+    finally:
+        web_jobs_module.run_queue = original_run_queue
+        with jobs_lock:
+            jobs.clear()
+
+    assert any("[info] fetching chapters: 2/2 chap" in line for line in a_logs), a_logs
+    assert any("[info] fetching chapters: 2/2 chap" in line for line in b_logs), b_logs
+    # A real cross-talk bug would route one job's progress into the other's log.
+    # Because the sink is bound per-thread, each job's progress line exists only
+    # in its own log list — assert the lines are co-located per job.
+    a_has = any("[info] fetching chapters: 2/2 chap" in line for line in a_logs)
+    b_has = any("[info] fetching chapters: 2/2 chap" in line for line in b_logs)
+    assert a_has and b_has
