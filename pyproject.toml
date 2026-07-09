@@ -97,6 +97,7 @@ ignore_missing_imports = true
 include = ["main.py", "web_app.py", "src", "tests"]
 exclude = [
     ".venv",
+    "venv",
     "**/__pycache__",
     ".pytest_cache",
     ".ruff_cache",

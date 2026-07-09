@@ -6,6 +6,14 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
+## What's New in 2.4.2
+
+* **Web-app concurrency fix**: parallel background jobs no longer clobber each other's progress. Each job gets an isolated, thread-local progress sink.
+* **Test collection fix**: `pytest` runs with `pythonpath = ["."]`, so a bare `pytest` invocation collects the suite (previously failed with `ModuleNotFoundError: No module named 'src'`).
+* **Credential hygiene**: `.api.json` and the example `output/` folder are no longer tracked and are git-ignored, so session credentials can't be committed by accident.
+
+---
+
 ## What's New in 2.4.1
 
 * Prints logged-in account status: `free`, `paid`, or `unknown`.
@@ -14,14 +22,6 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 * Retries transient chapter-content `403` responses and redacts `_t` tokens in saved errors.
 * Adds genre metadata to the EPUB About page when tags are available.
 * Splits internals into typed auth, API, cache, pipeline, export, CLI, and web-job helpers.
-
----
-
-## What's New in 2.4.2
-
-* **Web-app concurrency fix**: parallel background jobs no longer clobber each other's progress — each job now gets an isolated, thread-local progress sink.
-* **Test collection fix**: `pytest` runs with `pythonpath = ["."]`, so a bare `pytest` invocation collects the suite (previously failed with `ModuleNotFoundError: No module named 'src'`).
-* **Credential hygiene**: `.api.json` and the example `output/` folder are no longer tracked and are git-ignored, so session credentials can't be committed by accident.
 
 ---
 
@@ -45,7 +45,7 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 ## What It Does
 
 * Authenticates against `https://api-global.novelpia.com` and stores `login_at` token + cookies in `.api.json`.
-* `.api.json` holds your session secrets. It is git-ignored and untracked — never commit it, and treat it like a password. Re-login if it is ever exposed.
+* `.api.json` holds your session secrets. It is git-ignored and untracked. Never commit it, and treat it like a password. Re-login if it is ever exposed.
 * Calls `novel/episode/list` to collect metadata and episodes.
 * For each episode, requests a ticket, extracts the `_t` token, then fetches chapter content.
 * Normalizes HTML (images, structure), embeds images into the EPUB, adds a minimal stylesheet.
