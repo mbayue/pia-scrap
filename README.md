@@ -17,6 +17,14 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
+## What's New in 2.4.2
+
+* **Web-app concurrency fix**: parallel background jobs no longer clobber each other's progress — each job now gets an isolated, thread-local progress sink.
+* **Test collection fix**: `pytest` runs with `pythonpath = ["."]`, so a bare `pytest` invocation collects the suite (previously failed with `ModuleNotFoundError: No module named 'src'`).
+* **Credential hygiene**: `.api.json` and the example `output/` folder are no longer tracked and are git-ignored, so session credentials can't be committed by accident.
+
+---
+
 ## Features
 
 * API-based fetch (no browser automation).
@@ -37,6 +45,7 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 ## What It Does
 
 * Authenticates against `https://api-global.novelpia.com` and stores `login_at` token + cookies in `.api.json`.
+* `.api.json` holds your session secrets. It is git-ignored and untracked — never commit it, and treat it like a password. Re-login if it is ever exposed.
 * Calls `novel/episode/list` to collect metadata and episodes.
 * For each episode, requests a ticket, extracts the `_t` token, then fetches chapter content.
 * Normalizes HTML (images, structure), embeds images into the EPUB, adds a minimal stylesheet.
@@ -246,6 +255,20 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 * No-op updates — when `-up` finds every server chapter already cached, existing EPUB/TXT outputs are left unchanged.
 * Missing images — paste full browser Netscape cookies if chapter images use `pv-gn.novelpia.com`; those URLs may require CloudFront cookies before images can be embedded.
 * HTTP debug — pass `-v` to print masked headers/params and short body previews.
+
+---
+
+## Development & Testing
+
+This repo uses `ruff` for linting and `pytest` for tests.
+
+```bash
+pip install -r requirements.txt
+ruff check .
+pytest            # runs the full suite (pythonpath is configured in pyproject.toml)
+```
+
+The web app routes each background EPUB job through its own isolated progress sink, so concurrent jobs report progress independently without interfering with one another.
 
 ---
 
