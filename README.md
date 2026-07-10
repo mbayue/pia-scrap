@@ -124,23 +124,50 @@ Arguments
 
 1. First run with your Novelpia credentials (tokens are persisted to `.api.json`; see the `-u`/`-p` note above about `.env`):
 
-```bash
-python main.py 5522 -u you@example.com -p "your-password"
-```
+   ```bash
+   python main.py 5522 -u you@example.com -p "your-password"
+   ```
 
 2. Subsequent runs can reuse stored tokens (no password on the command line):
 
-```bash
-python main.py 5522
-```
+   ```bash
+   python main.py 5522
+   ```
 
 3. Update an ongoing novel later without redownloading cached chapters:
 
-```bash
-python main.py 5522 -up
-```
+   ```bash
+   python main.py 5522 -up
+   ```
 
-If a long normal download is cancelled or crashes, rerun the same novel with `-up`. Chapters already saved in `.cache/` are skipped, and only missing chapters are fetched.
+   If a long normal download is cancelled or crashes, rerun the same novel with `-up`. Chapters already saved in `.cache/` are skipped, and only missing chapters are fetched.
+
+4. Queue multiple novels with the same options:
+
+   ```bash
+   python main.py 5522 5760 -up
+   ```
+
+5. Keep an update queue in a text file:
+
+   ```txt
+   # novels.txt
+   https://global.novelpia.com/novel/5522
+   https://global.novelpia.com/novel/5760
+   ```
+
+   ```bash
+   python main.py -q novels.txt -up
+   ```
+
+   Queued runs print a final summary showing each novel ID, status, chapter count, and title or error.
+   Duplicate novel IDs are skipped after positional IDs and queue files are merged.
+
+6. Retry only chapters that failed during a previous run:
+
+   ```bash
+   python main.py 5522 -r
+   ```
 
 Mode behavior summary:
 
@@ -149,33 +176,6 @@ Mode behavior summary:
 | Normal | All selected chapters | Saves successful fresh fetches; may refresh existing cache | Fresh full download/build |
 | `-up` | Missing selected chapters only | Skips cached chapters, fetches missing ones | Resuming interrupted long runs; updating ongoing novels |
 | `-r` | Episodes listed in `failed_chapters.jsonl` only | Rebuilds from cached chapters plus retried successes | Retrying failed chapters without redownloading everything |
-
-4. Queue multiple novels with the same options:
-
-```bash
-python main.py 5522 5760 -up
-```
-
-5. Keep an update queue in a text file:
-
-```txt
-# novels.txt
-https://global.novelpia.com/novel/5522
-https://global.novelpia.com/novel/5760
-```
-
-```bash
-python main.py -q novels.txt -up
-```
-
-Queued runs print a final summary showing each novel ID, status, chapter count, and title or error.
-Duplicate novel IDs are skipped after positional IDs and queue files are merged.
-
-6. Retry only chapters that failed during a previous run:
-
-```bash
-python main.py 5522 -r
-```
 
 ### Web App
 
