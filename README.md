@@ -6,22 +6,14 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
-## What's New in 2.4.2
+## What's New in 2.5.0
 
-* **Web-app concurrency fix**: parallel background jobs no longer clobber each other's progress. Each job gets an isolated, thread-local progress sink.
-* **Test collection fix**: `pytest` runs with `pythonpath = ["."]`, so a bare `pytest` invocation collects the suite (previously failed with `ModuleNotFoundError: No module named 'src'`).
-* **Credential hygiene**: `.api.json` and the example `output/` folder are no longer tracked and are git-ignored, so session credentials can't be committed by accident.
-
----
-
-## What's New in 2.4.1
-
-* Prints logged-in account status: `free`, `paid`, or `unknown`.
-* Handles free-account ad-gated chapters with one notice and a short wait.
-* Stops at premium-only chapters for free accounts, then writes the chapters already fetched.
-* Retries transient chapter-content `403` responses and redacts `_t` tokens in saved errors.
-* Adds genre metadata to the EPUB About page when tags are available.
-* Splits internals into typed auth, API, cache, pipeline, export, CLI, and web-job helpers.
+* **Fixed stale-ticket retry storm**: chapter content fetches that hit a transient `403` now retry with a freshly-minted episode ticket instead of resending the same expired one, and no longer waste time on pointless session refreshes that couldn't have fixed the problem. Downloads recover in ~1 retry instead of stalling for several seconds per chapter.
+* **Fixed missing EPUB covers**: covers now fall back from `novel_full_img` to `novel_img` when the primary field points to a bad/placeholder image, and image detection sniffs file signatures instead of trusting an untrustworthy `Content-Type` header.
+* **Richer EPUB metadata**: EPUBs now carry `dc:description`, `dc:subject` (genre tags), `dc:source`, and `dc:date` alongside title/author/language, so library apps like Calibre can sort and search by them.
+* **Fixed literal `<br>` in descriptions**: novel synopses use `<br>` as a plain-text line break, not real HTML; both the EPUB About page and `metadata.json` now render real line breaks instead of the literal `<br>` characters.
+* **Centralized logging**: internal modules use structured logging instead of ad-hoc `print()` calls.
+* **Internal refactor**: `src/api.py` response parsing now uses typed contracts instead of loose dicts, and chapter caching, failed-chapter tracking, and fetch orchestration are split into focused modules (`chapter_cache.py`, `chapter_pipeline.py`). No behavior change for CLI/web usage.
 
 ---
 
@@ -112,7 +104,7 @@ Arguments
 
 * `NOVEL_ID` (positional) — one or more numeric `novel_no` values, e.g. `5522` or `5522 5760`
 * `-q` — read novel IDs or Novelpia novel URLs from a text file, one per line. Blank lines and `#` comments are ignored.
-* `-u`, `-p` — login once; tokens saved to `.api.json` for reuse.
+* `-u`, `-p` — login once; tokens saved to `.api.json` for reuse. Prefer `.env` for passwords; CLI passwords can appear in shell history and process lists.
 * `-out`, `-o` — output directory (default: `output`).
 * `-max` — fetch up to N episodes (0 or unset = all).
 * `-start` — start fetching from this chapter number.
@@ -130,31 +122,41 @@ Arguments
 
 ## Quick Start
 
-1) First run with your Novelpia credentials (tokens are persisted to `.api.json`):
+1. First run with your Novelpia credentials (tokens are persisted to `.api.json`; see the `-u`/`-p` note above about `.env`):
 
 ```bash
 python main.py 5522 -u you@example.com -p "your-password"
 ```
 
-1) Subsequent runs can reuse stored tokens (no password on the command line):
+2. Subsequent runs can reuse stored tokens (no password on the command line):
 
 ```bash
 python main.py 5522
 ```
 
-1) Update an ongoing novel later without redownloading cached chapters:
+3. Update an ongoing novel later without redownloading cached chapters:
 
 ```bash
 python main.py 5522 -up
 ```
 
-1) Queue multiple novels with the same options:
+If a long normal download is cancelled or crashes, rerun the same novel with `-up`. Chapters already saved in `.cache/` are skipped, and only missing chapters are fetched.
+
+Mode behavior summary:
+
+| Mode | Fetches | Uses `.cache/` | Best for |
+| --- | --- | --- | --- |
+| Normal | All selected chapters | Saves successful fresh fetches; may refresh existing cache | Fresh full download/build |
+| `-up` | Missing selected chapters only | Skips cached chapters, fetches missing ones | Resuming interrupted long runs; updating ongoing novels |
+| `-r` | Episodes listed in `failed_chapters.jsonl` only | Rebuilds from cached chapters plus retried successes | Retrying failed chapters without redownloading everything |
+
+4. Queue multiple novels with the same options:
 
 ```bash
 python main.py 5522 5760 -up
 ```
 
-1) Keep an update queue in a text file:
+5. Keep an update queue in a text file:
 
 ```txt
 # novels.txt
@@ -169,7 +171,7 @@ python main.py -q novels.txt -up
 Queued runs print a final summary showing each novel ID, status, chapter count, and title or error.
 Duplicate novel IDs are skipped after positional IDs and queue files are merged.
 
-1) Retry only chapters that failed during a previous run:
+6. Retry only chapters that failed during a previous run:
 
 ```bash
 python main.py 5522 -r
@@ -248,13 +250,10 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 
 ## Tips & Troubleshooting
 
-* **Auto-Recovery**: 401/expired tokens are now automatically handled if credentials are found in `.env` or provided via CLI.
-* **Retry Handling**: Rate-limit, transient content access, and server-error responses trigger retry delays before a chapter is marked failed.
-* Free accounts — ad-gated chapters may take longer because access is granted after a short wait. Premium-only chapters stop the run for free accounts, and already fetched chapters still produce EPUB/TXT output.
+* Rate-limit, transient content access, and server-error responses trigger retry delays before a chapter is marked failed.
 * Ad-gated runs print one notice when the first gated chapter is detected, then continue quietly for later gated chapters.
 * No-op updates — when `-up` finds every server chapter already cached, existing EPUB/TXT outputs are left unchanged.
 * Missing images — paste full browser Netscape cookies if chapter images use `pv-gn.novelpia.com`; those URLs may require CloudFront cookies before images can be embedded.
-* HTTP debug — pass `-v` to print masked headers/params and short body previews.
 
 ---
 
@@ -267,8 +266,6 @@ pip install -r requirements.txt
 ruff check .
 pytest            # runs the full suite (pythonpath is configured in pyproject.toml)
 ```
-
-The web app routes each background EPUB job through its own isolated progress sink, so concurrent jobs report progress independently without interfering with one another.
 
 ---
 

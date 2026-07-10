@@ -1,8 +1,14 @@
 import json
 
 from src.api import AdRewardRequired, KnownApiBlockError, PremiumEpisodeBlocked
-from src.builder import build_epub, build_txt
-from src.chapter_cache import fetch_with_cache, load_cache, load_failed_episode_nos
+from src.builder import build_epub, build_txt, merge_cache_with_fetched
+from src.chapter_cache import (
+    fetch_with_cache,
+    load_cache,
+    load_failed_episode_nos,
+    make_incremental_cache_writer,
+    write_cache_item_if_absent,
+)
 from src.chapter_pipeline import (
     AccountChapterPolicy,
     ChapterFetchMode,
@@ -10,19 +16,22 @@ from src.chapter_pipeline import (
     fetch_chapters,
     select_episodes,
 )
-from src.contracts import ChapterResult, EpisodeItem
+from src.contracts import ChapterResult, EpisodeItem, EpisodeListResponse, NovelResponse
 
 
 class DummyClient:
     def __init__(self, fetched: list[ChapterResult]):
         self.fetched = fetched
-        self.calls = []
+        self.calls: list[str | tuple[object, ...]] = []
+        self.s = __import__("requests").Session()
+        self.timeout = 30
 
     def fetch_episodes_parallel(
         self,
         ep_list: list[EpisodeItem],
         max_workers: int = 1,
         progress_cb=None,
+        on_result=None,
     ) -> list[ChapterResult]:
         self.calls.append((ep_list, max_workers))
         if progress_cb:
@@ -45,6 +54,7 @@ class FailingFetchClient(DummyClient):
         ep_list: list[EpisodeItem],
         max_workers: int = 1,
         progress_cb=None,
+        on_result=None,
     ) -> list[ChapterResult]:
         self.calls.append((ep_list, max_workers))
         return [
@@ -58,6 +68,22 @@ class FailingFetchClient(DummyClient):
         ]
 
 
+class RaisingParallelClient(DummyClient):
+    def fetch_episodes_parallel(
+        self,
+        ep_list: list[EpisodeItem],
+        max_workers: int = 1,
+        progress_cb=None,
+        on_result=None,
+    ) -> list[ChapterResult]:
+        raise ValueError("fetch failed")
+
+
+class RaisingFetchClient(DummyClient):
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
+        raise ValueError("fetch failed")
+
+
 class BuilderClient(DummyClient):
     def __init__(self, me_response: dict[str, object], fetched: list[ChapterResult]):
         super().__init__(fetched)
@@ -67,7 +93,7 @@ class BuilderClient(DummyClient):
         self.calls.append("me")
         return self.me_response
 
-    def novel(self, novel_id: int) -> dict[str, object]:
+    def novel(self, novel_id: int) -> "NovelResponse":
         self.calls.append(("novel", novel_id))
         return {
             "result": {
@@ -76,12 +102,12 @@ class BuilderClient(DummyClient):
             }
         }
 
-    def episode_list(self, novel_id: int, rows: int) -> dict[str, dict[str, list[EpisodeItem]]]:
+    def episode_list(self, novel_id: int, rows: int) -> "EpisodeListResponse":
         self.calls.append(("episode_list", novel_id, rows))
         return {"result": {"list": [{"episode_no": 80, "epi_num": 1, "epi_title": "Paid"}]}}
 
 class PartialBuilderClient(BuilderClient):
-    def episode_list(self, novel_id: int, rows: int) -> dict[str, dict[str, list[EpisodeItem]]]:
+    def episode_list(self, novel_id: int, rows: int) -> "EpisodeListResponse":
         self.calls.append(("episode_list", novel_id, rows))
         return {
             "result": {
@@ -158,6 +184,193 @@ def test_fetch_with_cache_updates_fresh_cache_rows(tmp_path):
     assert fetched_count == 1
     assert results[0].get("html") == "fresh"
     assert cache_row == {"idx": 1, "epi_no": 20, "epi_title": "Fresh", "html": "fresh"}
+
+
+def test_make_incremental_cache_writer_persists_completed_chapters(tmp_path):
+    book_dir = tmp_path / "book"
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "A"},
+        {"episode_no": 21, "epi_num": 2, "epi_title": "B"},
+    ]
+    writer = make_incremental_cache_writer(str(book_dir), episodes)
+
+    # Simulate chapters finishing one-by-one (e.g. as the parallel fetch completes)
+    writer(0, {"epi_no": 20, "html": "a", "epi_title": "A"})
+    writer(1, {"epi_no": 21, "html": "b", "epi_title": "B"})
+
+    assert (book_dir / ".cache" / "20.json").exists()
+    assert (book_dir / ".cache" / "21.json").exists()
+    assert load_cache(str(book_dir)) == {
+        20: {"idx": 1, "epi_no": 20, "epi_title": "A", "html": "a"},
+        21: {"idx": 2, "epi_no": 21, "epi_title": "B", "html": "b"},
+    }
+
+
+def test_make_incremental_cache_writer_skips_errors_and_runs_best_effort(tmp_path):
+    book_dir = tmp_path / "book"
+    episodes: list[EpisodeItem] = [{"episode_no": 20, "epi_num": 1, "epi_title": "A"}]
+    writer = make_incremental_cache_writer(str(book_dir), episodes)
+
+    # An error result must not be cached (it would be useless on resume).
+    writer(0, {"error": "boom", "epi_no": 20, "epi_title": "A"})
+    assert not (book_dir / ".cache").exists()
+
+
+def test_fetch_with_cache_on_result_caches_incrementally_on_cancel(tmp_path):
+    # Mirrors the real interrupt scenario: the parallel fetch is cancelled after
+    # some chapters complete. Those chapters must already be on disk so a resume
+    # (cache) picks them up instead of re-fetching from scratch.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+
+    class SlowInterruptClient(DummyClient):
+        def fetch_episodes_parallel(self, ep_list, max_workers=1, progress_cb=None, on_result=None):
+            results = []
+            for i, ep in enumerate(ep_list):
+                # First chapter succeeds and should be cached immediately.
+                res = {"epi_no": ep.get("episode_no"), "html": f"h{i}", "epi_title": ep.get("epi_title", "")}
+                results.append(res)
+                if on_result is not None:
+                    on_result(i, res)
+                if i == 0:
+                    # Simulate user cancel / error after the first chapter.
+                    raise KeyboardInterrupt
+            return results
+
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "A"},
+        {"episode_no": 21, "epi_num": 2, "epi_title": "B"},
+    ]
+    client = SlowInterruptClient([{"epi_no": 20, "html": "h0", "epi_title": "A"},
+                                  {"epi_no": 21, "html": "h1", "epi_title": "B"}])
+    writer = make_incremental_cache_writer(str(book_dir), episodes)
+    try:
+        fetch_with_cache(client, episodes, str(book_dir), use_cache=True, on_result=writer)
+    except KeyboardInterrupt:
+        pass
+
+    # Only the first chapter was fetched before cancel -> it must be cached.
+    assert (cache_dir / "20.json").exists()
+    assert not (cache_dir / "21.json").exists()
+    assert load_cache(str(book_dir)) == {
+        20: {"idx": 1, "epi_no": 20, "epi_title": "A", "html": "h0"}
+    }
+
+
+def test_fetch_with_cache_routes_on_result_index_to_original_ep_list_position(tmp_path):
+    # Regression: fetch_episodes_parallel calls on_result(idx, ...) with idx
+    # relative to the *fetch_items* subset it was given, not the full ep_list.
+    # When some early episodes are already cache-hits, fetch_items is a subset
+    # with smaller indices than their true position in ep_list. on_result must
+    # receive the correct ep_list-relative index, not the fetch_items-relative one.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    # Episodes 20 and 21 are already cached -> will be skipped (cache hits).
+    for epi_no, html in ((20, "cached-a"), (21, "cached-b")):
+        (cache_dir / f"{epi_no}.json").write_text(
+            json.dumps({"idx": 1, "epi_no": epi_no, "epi_title": f"Cached {epi_no}", "html": html}),
+            encoding="utf-8",
+        )
+
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "A"},  # cached, skipped
+        {"episode_no": 21, "epi_num": 2, "epi_title": "B"},  # cached, skipped
+        {"episode_no": 22, "epi_num": 3, "epi_title": "C"},  # fetched, fetch_items[0]
+        {"episode_no": 23, "epi_num": 4, "epi_title": "D"},  # fetched, fetch_items[1]
+    ]
+
+    class RecordingParallelClient(DummyClient):
+        def fetch_episodes_parallel(self, ep_list, max_workers=1, progress_cb=None, on_result=None):
+            results = []
+            for i, ep in enumerate(ep_list):
+                res = {"epi_no": ep.get("episode_no"), "html": f"h{i}", "epi_title": ep.get("epi_title", "")}
+                results.append(res)
+                if on_result is not None:
+                    # fetch_episodes_parallel's real semantics: idx is relative
+                    # to the list it was given (fetch_items), not the full ep_list.
+                    on_result(i, res)
+            return results
+
+    client = RecordingParallelClient([])
+    received: list[tuple[int, ChapterResult]] = []
+
+    def recording_on_result(index: int, result: ChapterResult) -> None:
+        received.append((index, result))
+
+    fetch_with_cache(
+        client,
+        episodes,
+        str(book_dir),
+        use_cache=True,
+        on_result=recording_on_result,
+    )
+
+    # fetch_items = [episodes[2], episodes[3]] (episode_no 22 and 23), called
+    # with fetch_episodes_parallel-relative indices 0 and 1. on_result must
+    # translate those back to their true ep_list positions: 2 and 3.
+    assert received == [
+        (2, {"epi_no": 22, "html": "h0", "epi_title": "C"}),
+        (3, {"epi_no": 23, "html": "h1", "epi_title": "D"}),
+    ]
+
+
+def test_fetch_with_cache_caches_even_when_use_cache_false(tmp_path):
+    # Regression for the "save to .cache regardless of mode" requirement: a plain
+    # fetch (no --update/--retry) must still persist every downloaded chapter so a
+    # cancel/error mid-run keeps partial progress.
+    book_dir = tmp_path / "book"
+    client = DummyClient([
+        {"epi_no": 20, "html": "a", "epi_title": "A"},
+        {"epi_no": 21, "html": "b", "epi_title": "B"},
+    ])
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "A"},
+        {"episode_no": 21, "epi_num": 2, "epi_title": "B"},
+    ]
+
+    fetch_with_cache(client, episodes, str(book_dir), use_cache=False)
+
+    assert (book_dir / ".cache" / "20.json").exists()
+    assert (book_dir / ".cache" / "21.json").exists()
+
+
+def test_write_cache_item_if_absent_never_overwrites_existing(tmp_path):
+    # A chapter already on disk must be left untouched, even if the fresh fetch
+    # produced different (or stale) content. Re-running never regresses good cache.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "20.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 20, "epi_title": "Original", "html": "original"}),
+        encoding="utf-8",
+    )
+
+    wrote = write_cache_item_if_absent(
+        str(book_dir), {"idx": 9, "epi_no": 20, "epi_title": "Fresh", "html": "fresh"}
+    )
+
+    assert wrote is False
+    row = json.loads((cache_dir / "20.json").read_text(encoding="utf-8"))
+    assert row == {"idx": 1, "epi_no": 20, "epi_title": "Original", "html": "original"}
+
+
+def test_make_incremental_cache_writer_never_overwrites_existing(tmp_path):
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "20.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 20, "epi_title": "Original", "html": "original"}),
+        encoding="utf-8",
+    )
+    episodes: list[EpisodeItem] = [{"episode_no": 20, "epi_num": 1, "epi_title": "A"}]
+    writer = make_incremental_cache_writer(str(book_dir), episodes)
+
+    writer(0, {"epi_no": 20, "html": "fresh", "epi_title": "Fresh"})
+
+    row = json.loads((cache_dir / "20.json").read_text(encoding="utf-8"))
+    assert row == {"idx": 1, "epi_no": 20, "epi_title": "Original", "html": "original"}
 
 
 def test_fetch_with_cache_retry_failed_refetches_cached_failed_episode(tmp_path):
@@ -249,6 +462,16 @@ def test_fetch_with_cache_redacts_failed_chapter_tokens(tmp_path):
     assert "_t=<redacted>" in failed
 
 
+def test_select_episodes_skips_malformed_epi_num():
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 11, "epi_num": "bad", "epi_title": "Two"},
+        {"episode_no": 12, "epi_title": "Three"},
+        {"episode_no": 13, "epi_num": 4, "epi_title": "Four"},
+    ]
+    selected = select_episodes(episodes, ChapterSelection(start_chapter=2))
+    assert [row.get("episode_no") for row in selected] == [13]
+
 def test_select_episodes_applies_start_end_then_max():
     episodes: list[EpisodeItem] = [
         {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
@@ -260,6 +483,17 @@ def test_select_episodes_applies_start_end_then_max():
     selected = select_episodes(episodes, ChapterSelection(start_chapter=2, end_chapter=4, max_chapters=2))
 
     assert [row.get("episode_no") for row in selected] == [11, 12]
+
+
+def test_select_episodes_keeps_malformed_epi_num_when_no_range_set():
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 11, "epi_num": "bad", "epi_title": "Two"},
+    ]
+
+    selected = select_episodes(episodes, ChapterSelection())
+
+    assert [row.get("episode_no") for row in selected] == [10, 11]
 
 
 def test_fetch_chapters_retry_failed_refetches_only_failed_cache_row(tmp_path):
@@ -566,3 +800,233 @@ def test_build_epub_preserves_partial_output_after_premium_stop(monkeypatch, tmp
     assert chapters == [{"idx": 1, "title": "One", "url": "https://global.novelpia.com/viewer/81"}]
     assert json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))["chapter"] == 1
     assert json.loads((output_dir / ".cache" / "81.json").read_text(encoding="utf-8"))["html"] == "<p>one</p>"
+
+
+def test_build_txt_retry_failed_rebuilds_from_cache_plus_retried(tmp_path):
+    # Regression: --retry-failed only fetches the previously-failed chapter, but
+    # the built book must still include the already-cached good chapters.
+    output_dir = tmp_path / "paid-book"
+    cache_dir = output_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "81.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 81, "epi_title": "One", "html": "<p>one</p>"}), encoding="utf-8"
+    )
+    (output_dir / "failed_chapters.jsonl").write_text(
+        json.dumps({"idx": 2, "epi_no": 82, "title": "Two", "url": "", "error": "boom"}) + "\n",
+        encoding="utf-8",
+    )
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [{"epi_no": 82, "html": "<p>two</p>", "epi_title": "Two"}],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path), retry_failed=True)
+
+    assert total == 2
+    assert book_dir == str(output_dir)
+    assert (output_dir / "1_One.txt").read_text(encoding="utf-8") == "one"
+    assert (output_dir / "2_Two.txt").read_text(encoding="utf-8") == "two"
+
+
+def test_build_txt_update_merge_cache_with_new_fetched(tmp_path):
+    # --update fetches only the missing chapter, but the output must contain both
+    # the cached chapter and the freshly fetched one.
+    output_dir = tmp_path / "paid-book"
+    cache_dir = output_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "81.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 81, "epi_title": "One", "html": "<p>one</p>"}), encoding="utf-8"
+    )
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [
+            {"epi_no": 82, "html": "<p>two</p>", "epi_title": "Premium"},
+            {"epi_no": 83, "html": "<p>three</p>", "epi_title": "Later"},
+        ],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path), update=True)
+
+    assert total == 3
+    assert book_dir == str(output_dir)
+    assert (output_dir / "1_One.txt").read_text(encoding="utf-8") == "one"
+    assert (output_dir / "3_Later.txt").read_text(encoding="utf-8") == "three"
+
+
+def test_build_txt_update_noop_when_nothing_new(tmp_path):
+    # --update is a no-op when the API fetched nothing new: it must return None
+    # (no rebuild) and leave any existing output untouched, even though chapters
+    # exist in .cache. --retry-failed differs by rebuilding from cache.
+    output_dir = tmp_path / "paid-book"
+    cache_dir = output_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "81.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 81, "epi_title": "One", "html": "<p>one</p>"}), encoding="utf-8"
+    )
+    (cache_dir / "82.json").write_text(
+        json.dumps({"idx": 2, "epi_no": 82, "epi_title": "Premium", "html": "<p>two</p>"}), encoding="utf-8"
+    )
+    # Every episode is already cached, so the API returns nothing new.
+    (cache_dir / "83.json").write_text(
+        json.dumps({"idx": 3, "epi_no": 83, "epi_title": "Later", "html": "<p>three</p>"}), encoding="utf-8"
+    )
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path), update=True)
+
+    assert book_dir is None
+    assert total == 0
+    # No chapters rendered to the output dir.
+    assert not (output_dir / "1_One.txt").exists()
+    assert not (output_dir / "2_Premium.txt").exists()
+
+
+def test_build_txt_retry_failed_noop_when_no_failed_chapters(tmp_path):
+    # --retry-failed is a no-op when there are no failed chapters to retry
+    # (no failed_chapters.jsonl), even if chapters exist in .cache.
+    output_dir = tmp_path / "paid-book"
+    cache_dir = output_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "81.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 81, "epi_title": "One", "html": "<p>one</p>"}), encoding="utf-8"
+    )
+    client = PartialBuilderClient(
+        {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
+        [],
+    )
+
+    book_dir, _title, total = build_txt(client, 7, str(tmp_path), retry_failed=True)
+
+    assert book_dir is None
+    assert total == 0
+    assert not (output_dir / "1_One.txt").exists()
+
+def test_fetch_with_cache_closes_progress_bar_when_parallel_fetch_raises(tmp_path, monkeypatch):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    client = RaisingParallelClient([])
+    fake_pbar = None
+
+    class FakeTqdm:
+        def __init__(self, *args, **kwargs):
+            nonlocal fake_pbar
+            self.closed = False
+            fake_pbar = self
+
+        def update(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("src.chapter_cache.tqdm", FakeTqdm)
+
+    try:
+        fetch_with_cache(client, [{"episode_no": 1}, {"episode_no": 2}], str(book_dir))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError")
+
+    assert fake_pbar is not None
+    assert fake_pbar.closed
+
+
+
+
+def test_fetch_with_account_policy_closes_progress_bar_when_fetch_raises(tmp_path, monkeypatch):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    client = RaisingFetchClient([])
+
+    fake_pbar = None
+
+    class FakeTqdm:
+        def __init__(self, *args, **kwargs):
+            nonlocal fake_pbar
+            self.closed = False
+            fake_pbar = self
+
+        def close(self):
+            self.closed = True
+
+        def update(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr("src.chapter_cache.tqdm", FakeTqdm)
+
+    try:
+        from src.chapter_cache import fetch_with_account_policy
+        fetch_with_account_policy(client, [{"episode_no": 1}, {"episode_no": 2}], str(book_dir))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError")
+
+    assert fake_pbar is not None
+    assert fake_pbar.closed
+
+
+
+def test_merge_cache_with_fetched_excludes_episode_that_failed_this_run(tmp_path):
+    # Regression: chapter 50 was cached by a prior successful run, but this
+    # run's fresh attempt to refetch it failed. The stale cache entry must NOT
+    # be silently used -- the episode should be dropped entirely, matching
+    # failed_chapters.jsonl (which records the failure independently).
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "50.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 50, "epi_title": "Fifty", "html": "<p>stale</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 50, "epi_num": 1, "epi_title": "Fifty"}]
+    fetched_results: list[ChapterResult] = [
+        {"error": "403 Client Error", "epi_no": 50, "epi_title": "Fifty"}
+    ]
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == []
+
+
+def test_merge_cache_with_fetched_falls_back_to_cache_for_unattempted_episode(tmp_path):
+    # Legitimate case: an episode not present in fetched_results at all (never
+    # attempted this run, e.g. --retry-failed's filtered subset) must still be
+    # filled in from .cache.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "60.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 60, "epi_title": "Sixty", "html": "<p>cached</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 60, "epi_num": 1, "epi_title": "Sixty"}]
+    fetched_results: list[ChapterResult] = []
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == [{"idx": 1, "epi_no": 60, "epi_title": "Sixty", "html": "<p>cached</p>"}]
+
+
+def test_merge_cache_with_fetched_prefers_fresh_result_over_cache(tmp_path):
+    # A fresh successful result for an episode always wins over its stale
+    # cache copy, regardless of the failed/unattempted distinction.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "70.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 70, "epi_title": "Seventy", "html": "<p>stale</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 70, "epi_num": 1, "epi_title": "Seventy"}]
+    fetched_results: list[ChapterResult] = [
+        {"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}
+    ]
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == [{"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}]

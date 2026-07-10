@@ -4,7 +4,7 @@ from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 
 from src.const import config_path_for_runtime
-from src.helper import attach_auth_cookies, j, load_config, mask_kv, save_config
+from src.helper import attach_auth_cookies, extract_t_token, j, load_config, mask_kv, save_config
 
 
 @unittest.skipIf(sys.platform != "win32", "Windows frozen executable path semantics")
@@ -79,6 +79,39 @@ def test_mask_kv_masks_nested_lowercase_loginat_and_t():
     data = {"outer": [{"loginat": "secret"}, {"url": "https://x?_t=still-long-token-value"}]}
 
     assert mask_kv(data) == {"outer": [{"loginat": "***"}, {"url": "https://x?_t=still-long-token-value"}]}
+
+def test_extract_t_token_prefers_jwt_at_top_level_result():
+    jwt = "a" * 20 + "." + "b" * 20 + "." + "c" * 20
+    tdata = {"result": {"_t": jwt, "other": "value"}}
+
+    assert extract_t_token(tdata) == jwt
+
+
+def test_extract_t_token_finds_jwt_in_nested_result_dict():
+    jwt = "a" * 20 + "." + "b" * 20 + "." + "c" * 20
+    tdata = {"result": {"nested": {"token": jwt}}}
+
+    assert extract_t_token(tdata) == jwt
+
+
+def test_extract_t_token_falls_back_to_non_jwt_string_when_no_jwt_found():
+    tdata = {"result": {"_t": "plain-non-jwt-token"}}
+
+    assert extract_t_token(tdata) == "plain-non-jwt-token"
+
+
+def test_extract_t_token_finds_token_embedded_in_content_endpoint_url():
+    url = "https://api-global.novelpia.com/v1/novel/episode/content?_t=url-embedded-token"
+    tdata = {"result": {"deep": {"link": url}}}
+
+    assert extract_t_token(tdata) == "url-embedded-token"
+
+
+def test_extract_t_token_returns_none_when_nothing_found():
+    tdata = {"result": {"unrelated": "value"}}
+
+    assert extract_t_token(tdata) is None
+
 
 def _cookie(name: str, value: str) -> Cookie:
     return Cookie(

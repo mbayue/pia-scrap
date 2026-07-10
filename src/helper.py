@@ -1,4 +1,5 @@
 import base64
+import html as html_module
 import json
 import os
 import re
@@ -10,6 +11,9 @@ from typing import Any, TypedDict
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from src.const import BASE_URL, CONFIG_PATH, IMG_BASE_HTTPS
+from src.logutil import get_logger
+
+logger = get_logger(__name__)
 
 # ----------------------------
 # Helpers
@@ -60,6 +64,19 @@ def kebab(s: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s or "book"
 
+def normalize_description(raw: str) -> str:
+    """Convert Novelpia's synopsis text into plain text with real newlines.
+
+    ``novel_story`` uses literal ``<br>``/``<br/>`` markers as paragraph breaks
+    but is otherwise plain text, not real HTML. Rendering it verbatim (or via
+    ``html.escape``) leaves the literal ``<br>`` characters visible instead of a
+    line break. Any other stray tags are stripped defensively since this is
+    user-generated content, not markup we should trust or execute.
+    """
+    text = re.sub(r"<br\s*/?>", "\n", raw, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html_module.unescape(text).strip()
+
 # ----------------------------
 # Config/auth management
 # ----------------------------
@@ -92,9 +109,9 @@ def load_config() -> AuthConfig:
                 raw = json.load(f) or {}
                 if isinstance(raw, dict):
                     return normalize_auth_config({str(k): v for k, v in raw.items()})
-                print("Error occurred while loading config: config root is not an object")
+                logger.error("Error occurred while loading config: config root is not an object")
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
-        print(f"Error occurred while loading config: {e}")
+        logger.error(f"Error occurred while loading config: {e}")
         return {}
     return {}
 
@@ -116,7 +133,7 @@ def save_config(cfg: Mapping[str, str | None]) -> None:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-        print(f"Error occurred while saving config: {e}")
+        logger.error(f"Error occurred while saving config: {e}")
         pass
 
 # ----------------------------
@@ -202,7 +219,7 @@ def get_cookie_value(cookie_jar: CookieJar, name: str) -> str | None:
             if cookie.name.lower() == target:
                 return cookie.value
     except (AttributeError, TypeError) as e:
-        print(f"Error occurred while reading cookies: {e}")
+        logger.error(f"Error occurred while reading cookies: {e}")
     return None
 
 def cookie_auth_from_jar(cookie_jar: CookieJar, login_at_fallback: str | None = None) -> CookieAuth:
@@ -253,49 +270,83 @@ def iter_strings(obj):
         for v in obj:
             yield from iter_strings(v)
 
-def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    """Return (token, direct_content_url_or_none).
+
+TOKEN_KEYS = ("_t", "t", "token")
+CONTENT_ENDPOINT_HOST = "api-global.novelpia.com"
+CONTENT_ENDPOINT_PATH = "/v1/novel/episode/content"
+
+
+def _scan_mapping_for_token(
+    source: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    """Scan ``source`` for token keys.
+
+    Returns ``(jwt_token, fallback_token)``. ``jwt_token`` is non-None only when a
+    JWT-like token is found (caller should return immediately then).
+    """
+    fallback: str | None = None
+    for k in TOKEN_KEYS:
+        v = source.get(k)
+        if isinstance(v, str) and v:
+            if looks_like_jwt(v):
+                return v, None
+            fallback = fallback or v
+    return None, fallback
+
+
+def _content_url_token(s: str) -> tuple[str | None, str | None, bool]:
+    """If ``s`` is the official content endpoint, return ``(jwt, fallback, is_content_url)``."""
+    try:
+        p = urlparse(s)
+        if p.netloc.endswith(CONTENT_ENDPOINT_HOST) and p.path.endswith(CONTENT_ENDPOINT_PATH):
+            q = parse_qs(p.query)
+            values = q.get("_t")
+            cand = values[0] if values else None
+            if isinstance(cand, str) and cand:
+                if looks_like_jwt(cand):
+                    return cand, None, True
+                return None, cand, True
+    except Exception as e:
+        logger.error(f"Error occurred while parsing URL: {e}")
+    return None, None, False
+
+
+def extract_t_token(tdata: Mapping[str, Any]) -> str | None:
+    """Return the ``_t`` token to use with the episode content endpoint.
+
     Prefer JWT-like tokens, but accept any non-empty string if present.
-    If using URL, accept any _t value on the official content endpoint.
+    Checks common keys at the top level and in nested dicts, then falls back
+    to scanning for a ``_t`` value embedded in the query string of a URL that
+    points at the official content endpoint (Novelpia sometimes nests the
+    token this way instead of as a bare key). Every case that yields a token
+    yields one usable directly as the ``_t`` query param for
+    ``NovelpiaClient.episode_content`` -- there is no case where only a
+    standalone content URL is available without also yielding its token.
     """
     res = tdata.get("result", {}) if isinstance(tdata, dict) else {}
     fallback_token: str | None = None
 
     # 1) common keys at result
-    for k in ("_t", "t", "token"):
-        v = res.get(k)
-        if isinstance(v, str) and v:
-            if looks_like_jwt(v):
-                return v, None
-            fallback_token = fallback_token or v
+    jwt, fb = _scan_mapping_for_token(res)
+    if jwt:
+        return jwt
+    fallback_token = fb
 
     # 2) nested dicts under result
     if isinstance(res, dict):
         for _, v in res.items():
             if isinstance(v, dict):
-                for k in ("_t", "t", "token"):
-                    vv = v.get(k)
-                    if isinstance(vv, str) and vv:
-                        if looks_like_jwt(vv):
-                            return vv, None
-                        fallback_token = fallback_token or vv
+                j, fb2 = _scan_mapping_for_token(v)
+                if j:
+                    return j
+                fallback_token = fallback_token or fb2
 
     # 3) URL that is the official content endpoint with any _t
     for s in iter_strings(tdata):
         if isinstance(s, str) and (s.startswith("http://") or s.startswith("https://")):
-            try:
-                p = urlparse(s)
-                if p.netloc.endswith("api-global.novelpia.com") and p.path.endswith("/v1/novel/episode/content"):
-                    q = parse_qs(p.query)
-                    cand = (q.get("_t") or [None])[0]
-                    if isinstance(cand, str) and cand:
-                        if looks_like_jwt(cand):
-                            return cand, s
-                        # fallback
-                        fallback_token = fallback_token or cand
-            except Exception as e:
-                print(f"Error occurred while parsing URL: {e}")
-                pass
-    if fallback_token:
-        return fallback_token, None
-    return None, None
+            jwt, fb, is_url = _content_url_token(s)
+            if is_url:
+                if jwt:
+                    return jwt
+                fallback_token = fallback_token or fb
+    return fallback_token
