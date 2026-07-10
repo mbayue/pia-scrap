@@ -1,11 +1,23 @@
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal, Protocol
 
 from bs4 import BeautifulSoup
 
-from src.contracts import EpisodeItem, NovelResponse
+from src.contracts import EpisodeItem, EpisodeListResponse, NovelResponse
 from src.helper import normalize_url
+from src.logutil import get_logger
+
+logger = get_logger(__name__)
 
 AccountStatus = Literal["paid", "free", "unknown"]
+
+
+class NovelMetadataClient(Protocol):
+    def me(self) -> Mapping[str, Any]: ...
+
+    def novel(self, novel_id: int) -> NovelResponse: ...
+
+    def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse: ...
 
 # ----------------------------
 # Novelpia Novel & Episodes Fetcher
@@ -26,29 +38,29 @@ def html_from_episode_text(raw_html: str) -> str:
     # Ensure document wrapper with meta charset="utf-8"
     if not soup.find("html"):
         html_tag = soup.new_tag("html")
-        head = soup.new_tag("head")
-        meta = soup.new_tag("meta", charset="utf-8")
-        head.append(meta)
+        head_tag = soup.new_tag("head")
+        meta_tag = soup.new_tag("meta", attrs={"charset": "utf-8"})
+        head_tag.append(meta_tag)
         body = soup.new_tag("body")
         for el in list(soup.children):
             body.append(el.extract())
-        html_tag.append(head)
+        html_tag.append(head_tag)
         html_tag.append(body)
         soup.append(html_tag)
     else:
         # With lxml, soup often gets auto-wrapped in <html><body>
         # We need to ensure the head and meta tag are present to avoid regressions.
-        head = soup.find("head")
-        if not head:
-            head = soup.new_tag("head")
-            html_tag = soup.html
-            if html_tag is not None:
-                html_tag.insert(0, head)
+        found_head = soup.find("head")
+        if not found_head or isinstance(found_head, str):
+            found_head = soup.new_tag("head")
+            found_html = soup.html
+            if found_html is not None and not isinstance(found_html, str):
+                found_html.insert(0, found_head)
 
-        meta = head.find("meta", charset="utf-8")
-        if not meta:
-            meta = soup.new_tag("meta", charset="utf-8")
-            head.append(meta)
+        found_meta = found_head.find("meta", {"charset": "utf-8"}) if not isinstance(found_head, str) else None
+        if not found_meta:
+            new_meta = soup.new_tag("meta", attrs={"charset": "utf-8"})
+            found_head.append(new_meta)
 
     return str(soup)
 
@@ -72,7 +84,8 @@ def user_subscription_status(me_response: object) -> AccountStatus:
     return "unknown"
 
 def fetch_novel_and_episodes(
-    client, novel_id, start_chapter=None, end_chapter=None, max_chapters=None
+    client: NovelMetadataClient,
+    novel_id: int,
 ) -> tuple[NovelResponse, list[EpisodeItem], str, AccountStatus]:
     # Auth check
     account_status: AccountStatus = "unknown"
@@ -81,12 +94,12 @@ def fetch_novel_and_episodes(
         if str(res.get("statusCode")) == "200":
             account_status = user_subscription_status(res)
             mem = (((res.get("result") or {}).get("login") or {}).get("mem_nick")) or "Unknown"
-            print(f"[auth] Logged in as: {mem}")
-            print(f"[info] User status: {account_status}")
+            logger.info(f"[auth] Logged in as: {mem}")
+            logger.info(f"[info] User status: {account_status}")
     except Exception as e:
-        print(f"[warn] auth check failed: {e}")
+        logger.warning(f"[warn] auth check failed: {e}")
 
-    print("[info] extracting metadata…")
+    logger.info("[info] extracting metadata…")
     data_novel = client.novel(novel_id)
 
     nv = data_novel["result"]["novel"]
@@ -96,19 +109,10 @@ def fetch_novel_and_episodes(
     author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
 
-    print(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")
+    logger.info(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")
 
     rows = max(2, int(epi_cnt)) if epi_cnt else 1000
     data_list = client.episode_list(novel_id, rows=rows)
     ep_list = data_list["result"].get("list", [])
-
-    # Handle range
-    if start_chapter:
-        ep_list = [ep for ep in ep_list if int(ep.get("epi_num", 0)) >= int(start_chapter)]
-    if end_chapter:
-        ep_list = [ep for ep in ep_list if int(ep.get("epi_num", 0)) <= int(end_chapter)]
-
-    if max_chapters:
-        ep_list = ep_list[:int(max_chapters)]
 
     return data_novel, ep_list, title, account_status

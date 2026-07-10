@@ -16,6 +16,8 @@ from src.runner import (
     run_queue,
 )
 
+CliValue = str | int | float | bool | list[int] | list[str] | None
+
 
 def test_parse_queue_lines_accepts_ids_urls_commas_and_comments():
     lines = [
@@ -186,8 +188,27 @@ def test_build_queue_request_sets_summary_for_queue_file(tmp_path):
     assert request.novel_ids == [49]
     assert request.show_summary is True
 
-def _cli_args(**overrides):
-    values = {
+
+def test_build_queue_request_rejects_invalid_numeric_options():
+    cases: list[tuple[dict[str, CliValue], str]] = [
+        ({"workers": 0}, "-w/--workers must be at least 1"),
+        ({"throttle": -0.1}, "-t/--throttle must be 0 or greater"),
+        ({"max_chapters": -1}, "-max must be 0 or greater"),
+        ({"start_chapter": 0}, "-start must be at least 1"),
+        ({"end_chapter": 0}, "-end must be at least 1"),
+        ({"start_chapter": 3, "end_chapter": 2}, "-start must be less than or equal to -end"),
+    ]
+
+    for overrides, message in cases:
+        try:
+            build_queue_request(_cli_args(novel_ids=[49], **overrides))
+        except CliUsageError as exc:
+            assert str(exc) == message
+        else:
+            raise AssertionError(f"expected CliUsageError for {overrides}")
+
+def _cli_args(**overrides: CliValue):
+    values: dict[str, CliValue] = {
         "novel_ids": [],
         "queue": [],
         "out": "output",

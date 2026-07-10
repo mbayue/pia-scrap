@@ -21,6 +21,9 @@ from src.helper import (
     load_netscape_cookies_text,
     save_config,
 )
+from src.logutil import get_logger
+
+logger = get_logger(__name__)
 
 LogFn = Callable[[str], None]
 
@@ -61,6 +64,25 @@ class QueueRequest:
 class CliUsageError(ValueError):
     pass
 
+
+def validate_queue_options(options: QueueOptions) -> None:
+    if options.workers < 1:
+        raise CliUsageError("-w/--workers must be at least 1")
+    if options.throttle < 0:
+        raise CliUsageError("-t/--throttle must be 0 or greater")
+    if options.max_chapters < 0:
+        raise CliUsageError("-max must be 0 or greater")
+    if options.start_chapter is not None and options.start_chapter < 1:
+        raise CliUsageError("-start must be at least 1")
+    if options.end_chapter is not None and options.end_chapter < 1:
+        raise CliUsageError("-end must be at least 1")
+    if (
+        options.start_chapter is not None
+        and options.end_chapter is not None
+        and options.start_chapter > options.end_chapter
+    ):
+        raise CliUsageError("-start must be less than or equal to -end")
+
 def _parse_novel_token(item: str) -> int:
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
     if match:
@@ -100,26 +122,29 @@ def build_queue_request(args: argparse.Namespace) -> QueueRequest:
     if not novel_ids:
         raise CliUsageError("provide at least one novel_id or -q FILE")
 
+    options = QueueOptions(
+        out=args.out,
+        start_chapter=args.start_chapter,
+        end_chapter=args.end_chapter,
+        max_chapters=args.max_chapters,
+        lang=args.lang,
+        proxy=args.proxy,
+        debug=args.debug,
+        throttle=args.throttle,
+        workers=args.workers,
+        update=args.update,
+        retry_failed=args.retry_failed,
+        txt=args.txt,
+        email=args.email,
+        password=args.password,
+        cookie_file=getattr(args, "cookie_file", None),
+        cookie_text=getattr(args, "cookie_text", None),
+    )
+    validate_queue_options(options)
+
     return QueueRequest(
         novel_ids=novel_ids,
-        options=QueueOptions(
-            out=args.out,
-            start_chapter=args.start_chapter,
-            end_chapter=args.end_chapter,
-            max_chapters=args.max_chapters,
-            lang=args.lang,
-            proxy=args.proxy,
-            debug=args.debug,
-            throttle=args.throttle,
-            workers=args.workers,
-            update=args.update,
-            retry_failed=args.retry_failed,
-            txt=args.txt,
-            email=args.email,
-            password=args.password,
-            cookie_file=getattr(args, "cookie_file", None),
-            cookie_text=getattr(args, "cookie_text", None),
-        ),
+        options=options,
         show_summary=len(novel_ids) > 1 or bool(args.queue),
     )
 
@@ -262,7 +287,10 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
                         max_workers=options.workers,
                     )
                     if out_dir_final is None:
-                        log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
+                        if options.retry_failed:
+                            log(f"[info] No failed chapters to retry for '{title}'. Nothing to do.")
+                        else:
+                            log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
                         summary_rows.append({
                             "novel_id": novel_id,
                             "status": "no updates",
@@ -294,7 +322,10 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
                         max_workers=options.workers,
                     )
                     if out_file is None:
-                        log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
+                        if options.retry_failed:
+                            log(f"[info] No failed chapters to retry for '{title}'. Nothing to do.")
+                        else:
+                            log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
                         summary_rows.append({
                             "novel_id": novel_id,
                             "status": "no updates",
@@ -331,8 +362,8 @@ def print_queue_summary(rows: list[QueueSummaryRow]) -> None:
     if not rows:
         return
 
-    print("\n[summary]")
-    print(f"{'novel_id':<10} {'status':<12} {'chapters':<8} title")
+    logger.info("\n[summary]")
+    logger.info(f"{'novel_id':<10} {'status':<12} {'chapters':<8} title")
     for row in rows:
         chapters = "" if row.get("chapters") is None else str(row.get("chapters"))
-        print(f"{row['novel_id']:<10} {row['status']:<12} {chapters:<8} {row['title']}")
+        logger.info(f"{row['novel_id']:<10} {row['status']:<12} {chapters:<8} {row['title']}")

@@ -21,7 +21,7 @@ class ErrorResponse:
     def __init__(self, status_code: int):
         self.status_code = status_code
         self.content = b""
-        self.headers = {}
+        self.headers: dict[str, str] = {}
 
     def raise_for_status(self):
         response = requests.Response()
@@ -29,7 +29,7 @@ class ErrorResponse:
         raise requests.HTTPError("blocked", response=response)
 
 
-def _failing_client(monkeypatch):
+def _failing_client(monkeypatch) -> NovelpiaClient:
     client = NovelpiaClient(throttle=0)
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("network down")))
     return client
@@ -89,7 +89,7 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
         },
     }
     password = "test-" + "password"
-    client = NovelpiaClient(email="user@example.com", password=password, throttle=0)
+    client: NovelpiaClient = NovelpiaClient(email="user@example.com", password=password, throttle=0)
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image fetch")))
     monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
 
@@ -190,7 +190,12 @@ def test_fetch_bytes_does_not_retry_permanent_4xx(monkeypatch, capsys):
     monkeypatch.setattr("src.export.time.sleep", lambda _seconds: (_ for _ in ()).throw(AssertionError("no retry")))
     client = NovelpiaClient(throttle=0)
     calls = []
-    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: calls.append(True) or ErrorResponse(403))
+
+    def get_blocked(*_args, **_kwargs) -> ErrorResponse:
+        calls.append(True)
+        return ErrorResponse(403)
+
+    monkeypatch.setattr(client.s, "get", get_blocked)
 
     result = ImageFetcher(debug_dump=True).fetch_bytes(client, "https://example.com/missing.jpg")
 

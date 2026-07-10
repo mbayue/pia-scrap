@@ -1,18 +1,55 @@
 import html
 import os
+from collections.abc import Callable
+from typing import Protocol
 
+import requests
 from ebooklib import epub
 from tqdm import tqdm
 
-from src.api import NovelpiaClient
 from src.const import BASE_URL
 from src.contracts import ChapterResult, EpisodeItem, NovelResponse
 from src.export import EpubImageAdapter, ImageFetcher
-from src.helper import ensure_dir, kebab, normalize_url
+from src.helper import ensure_dir, kebab, normalize_description, normalize_url
+from src.logutil import get_logger
+
+logger = get_logger(__name__)
+
+# ebooklib's add_metadata() passes attribute dicts straight to lxml without
+# registering namespace prefixes, so a plain "opf:scheme" key raises
+# ValueError: Invalid attribute name. Clark notation ("{uri}local") is the
+# form lxml accepts for a namespaced attribute without a prefix declaration.
+_OPF_SCHEME_ATTR = f"{{{epub.NAMESPACES['OPF']}}}scheme"
+
+
+class EpubClient(Protocol):
+    s: requests.Session
+    timeout: int
+
+    def fetch_episodes_parallel(
+        self,
+        ep_list: list[EpisodeItem],
+        max_workers: int = 1,
+        progress_cb: Callable[[], None] | None = None,
+        on_result: Callable[[int, ChapterResult], None] | None = None,
+    ) -> list[ChapterResult]: ...
 
 # ----------------------------
 # EPUB Builder
 # ----------------------------
+
+def _epub_date(raw: object) -> str | None:
+    """Extract a ``YYYY-MM-DD`` date from Novelpia's ``"YYYY-MM-DD HH:MM:SS"``
+    timestamp for use as ``dc:date``. Returns ``None`` for missing/placeholder
+    values (Novelpia uses ``"0000-00-00 00:00:00"`` for unset dates).
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    date_part = raw.split(" ", 1)[0]
+    if len(date_part) != 10 or date_part.startswith("0000"):
+        return None
+    return date_part
+
 
 def _genre_names(novel: NovelResponse) -> list[str]:
     result = novel["result"]
@@ -36,13 +73,10 @@ class EpubBuilder:
         ensure_dir(out_dir)
         self._image_fetcher = ImageFetcher(debug_dump=debug_dump)
 
-    def _fetch_headers(self, client: NovelpiaClient, url: str) -> dict[str, str]:
-        return self._image_fetcher.fetch_headers(client)
-
-    def _fetch_bytes(self, client: NovelpiaClient, url: str) -> bytes | None:
+    def _fetch_bytes(self, client: EpubClient, url: str) -> bytes | None:
         return self._image_fetcher.fetch_bytes(client, url)
 
-    def build(self, client: NovelpiaClient, novel: NovelResponse, episodes: list[EpisodeItem],
+    def build(self, client: EpubClient, novel: NovelResponse, episodes: list[EpisodeItem],
               filename_hint: str | None = None, language: str = "en",
               author_fallback: str = "Unknown", css_text: str | None = None,
               novel_id: int | None = None, fetched_results: list[ChapterResult] | None = None,
@@ -53,7 +87,7 @@ class EpubBuilder:
         writers = result.get("writer_list") or []
         author = (writers[0].get("writer_name") if writers else None) or author_fallback
         status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
-        description = (nv.get("novel_story") or "").strip()
+        description = normalize_description(nv.get("novel_story") or "")
 
         book = epub.EpubBook()
         book.set_identifier(f"novelpia-{nv.get('novel_no')}")
@@ -61,13 +95,39 @@ class EpubBuilder:
         book.set_language(language)
         book.add_author(author)
 
-        # Cover
-        cover_url = normalize_url(nv.get("novel_full_img") or nv.get("novel_img") or "")
-        cover_bytes = self._fetch_bytes(client, cover_url) if cover_url else None
+        if description:
+            book.add_metadata("DC", "description", description)
+
+        for genre in _genre_names(novel):
+            book.add_metadata("DC", "subject", genre)
+
+        src_url = f"{BASE_URL}/novel/{novel_id}" if novel_id else ""
+        if src_url:
+            book.add_metadata("DC", "source", src_url)
+            book.add_metadata("DC", "identifier", src_url, {_OPF_SCHEME_ATTR: "URL", "id": "source-url"})
+
+        published_date = _epub_date(nv.get("reg_dt"))
+        if published_date:
+            book.add_metadata("DC", "date", published_date)
+
+        # Cover. Try novel_full_img first, then fall back to novel_img: Novelpia
+        # sometimes returns a non-image placeholder for novel_full_img (points at
+        # a stray "images.novelpia.com" path segment instead of a real file), so
+        # a non-empty field isn't proof the fetch will actually succeed.
         has_cover = False
-        if cover_bytes:
-            book.set_cover("cover.jpg", cover_bytes)
+        cover_file_name = "cover.jpg"
+        for cover_field_value in (nv.get("novel_full_img"), nv.get("novel_img")):
+            cover_url = normalize_url(cover_field_value or "")
+            if not cover_url:
+                continue
+            fetched_cover = self._image_fetcher.fetch_image(client, cover_url)
+            if fetched_cover is None:
+                continue
+            cover_bytes, cover_ext = fetched_cover
+            cover_file_name = f"cover{cover_ext}"
+            book.set_cover(cover_file_name, cover_bytes)
             has_cover = True
+            break
 
         # CSS
         default_css = css_text or (
@@ -96,17 +156,19 @@ class EpubBuilder:
             def update_pbar():
                 pbar.update(1)
 
-            fetched_results = client.fetch_episodes_parallel(
-                episodes,
-                max_workers=max_workers,
-                progress_cb=update_pbar,
-            )
-            pbar.close()
+            try:
+                fetched_results = client.fetch_episodes_parallel(
+                    episodes,
+                    max_workers=max_workers,
+                    progress_cb=update_pbar,
+                )
+            finally:
+                pbar.close()
 
         for i, res in enumerate(fetched_results, 1):
             if not res or "error" in res:
                 err = res.get("error") if res else "Unknown error"
-                print(f"[warn] Failed to fetch chapter {i}: {err}")
+                logger.warning(f"[warn] Failed to fetch chapter {i}: {err}")
                 continue
 
             html_text = res.get("html") or ""
@@ -134,12 +196,11 @@ class EpubBuilder:
                 book.add_item(item)
 
         # About / metadata page
-        src_url = f"{BASE_URL}/novel/{novel_id}" if novel_id else ""
         meta_parts = []
         meta_parts.append(f"<h1>{html.escape(title)}</h1>")
         if has_cover:
             meta_parts.append(
-                "<p><img src='cover.jpg' alt='Cover' "
+                f"<p><img src='{cover_file_name}' alt='Cover' "
                 "style='width:230px;max-width:90%;height:auto;border-radius:12px;"
                 "box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>"
             )
@@ -152,7 +213,8 @@ class EpubBuilder:
         if src_url:
             meta_parts.append(f"<p><strong>Source:</strong> <a href='{src_url}'>{src_url}</a></p>")
         if description:
-            meta_parts.append(f"<p>{html.escape(description)}</p>")
+            escaped_description = html.escape(description).replace("\n", "<br/>")
+            meta_parts.append(f"<p>{escaped_description}</p>")
         meta_html = (
             "<html><head><link rel='stylesheet' href='style/main.css'/></head><body>"
              + "".join(meta_parts) + "</body></html>"

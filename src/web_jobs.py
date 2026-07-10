@@ -4,7 +4,9 @@ import threading
 import uuid
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Final, NotRequired, TypedDict
+from typing import Any, Final, TypedDict
+
+from typing_extensions import NotRequired
 
 from src import chapter_cache as chapter_cache_module
 from src import epub as epub_module
@@ -187,6 +189,8 @@ def create_job(novel_text: str, options: QueueOptions, thread_factory: type[thre
             "status": "queued",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "novel_ids": novel_ids,
+            "started_at": "",
+            "finished_at": "",
             "logs": [],
             "rows": [],
             "failures": [],
