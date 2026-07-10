@@ -104,8 +104,9 @@ class BlockKind(str, Enum):
     PREMIUM = "premium episode blocked"
 
 
+_BLOCK_LABEL_PATTERN = "|".join(re.escape(kind.value) for kind in BlockKind)
 _BLOCK_RE = re.compile(
-    r"^(?P<label>ad reward required|premium episode blocked): "
+    rf"^(?P<label>{_BLOCK_LABEL_PATTERN}): "
     r"novel_no=(?P<novel_no>\d+) episode_no=(?P<episode_no>\d+)$"
 )
 

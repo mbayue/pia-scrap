@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from src.const import BASE_URL
 from src.contracts import ChapterResult, EpisodeItem, NovelResponse
-from src.export import EpubImageAdapter, ImageFetcher
+from src.export import EpubImageAdapter, ImageFetcher, sniff_image_extension
 from src.helper import ensure_dir, kebab, normalize_description, normalize_url
 from src.logutil import get_logger
 
@@ -124,6 +124,13 @@ class EpubBuilder:
             if fetched_cover is None:
                 continue
             cover_bytes, cover_ext = fetched_cover
+            if sniff_image_extension(cover_bytes) is None:
+                # Header/URL extension said this was a supported image type,
+                # but the actual bytes aren't a recognized image signature
+                # (e.g. an HTML error page or corrupted response labeled as
+                # an image). Don't trust it for the cover -- fall through to
+                # the next candidate field instead of embedding bad data.
+                continue
             cover_file_name = f"cover{cover_ext}"
             book.set_cover(cover_file_name, cover_bytes)
             has_cover = True

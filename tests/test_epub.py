@@ -17,6 +17,19 @@ class OkResponse:
         return None
 
 
+class FakeImageResponse:
+    """Like OkResponse, but with settable content for byte-sniffing tests."""
+
+    status_code = 200
+
+    def __init__(self, content: bytes, headers: dict[str, str] | None = None):
+        self.content = content
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        return None
+
+
 class ErrorResponse:
     def __init__(self, status_code: int):
         self.status_code = status_code
@@ -150,6 +163,52 @@ def test_build_about_page_includes_genres(monkeypatch, tmp_path):
 
     about = next(item for item in written[0][1].get_items() if item.file_name == "about.xhtml")
     assert "<strong>Genre:</strong> Fantasy, Comedy, Drama" in about.content
+
+def test_build_falls_back_to_novel_img_when_full_img_bytes_are_not_a_real_image(monkeypatch, tmp_path):
+    # Regression: novel_full_img can come back with a Content-Type/URL that
+    # *claims* a supported image type (e.g. a CDN/proxy error page mislabeled
+    # as "image/jpeg") while the actual body isn't a real image. fetch_image
+    # can't tell the difference by header/extension alone, so the cover path
+    # must sniff the bytes itself and fall through to novel_img instead of
+    # embedding the bad response.
+    written = []
+    novel: NovelResponse = {
+        "result": {
+            "novel": {
+                "novel_no": 49,
+                "novel_name": "Book",
+                "flag_complete": 0,
+                "novel_full_img": "https://example.com/bad.jpg",
+                "novel_img": "https://example.com/good.jpg",
+            },
+            "writer_list": [{"writer_name": "Author"}],
+        },
+    }
+    client = NovelpiaClient(throttle=0)
+
+    def fake_get(url, *_args, **_kwargs):
+        if url == "https://example.com/bad.jpg":
+            # Mislabeled: valid image Content-Type, but the body is an HTML
+            # error page, not real image bytes.
+            return FakeImageResponse(b"<html>error</html>", {"Content-Type": "image/jpeg"})
+        return FakeImageResponse(b"\xff\xd8\xffreal-jpeg-bytes", {"Content-Type": "image/jpeg"})
+
+    monkeypatch.setattr(client.s, "get", fake_get)
+    monkeypatch.setattr("src.epub.epub.write_epub", lambda path, book, _opts: written.append((path, book)))
+
+    EpubBuilder(str(tmp_path)).build(
+        client,
+        novel,
+        [{"episode_no": 1, "epi_title": "One"}],
+        filename_hint="Book",
+        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": "<p>ok</p>"}],
+    )
+
+    book = written[0][1]
+    cover_items = [item for item in book.get_items() if item.file_name == "cover.jpg"]
+    assert len(cover_items) == 1
+    assert cover_items[0].content == b"\xff\xd8\xffreal-jpeg-bytes"
+
 
 def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
     client = NovelpiaClient(throttle=0)

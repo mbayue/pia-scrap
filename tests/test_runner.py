@@ -207,6 +207,15 @@ def test_build_queue_request_rejects_invalid_numeric_options():
         else:
             raise AssertionError(f"expected CliUsageError for {overrides}")
 
+def test_build_queue_request_rejects_non_finite_throttle():
+    for throttle in (float("nan"), float("inf")):
+        try:
+            build_queue_request(_cli_args(novel_ids=[49], throttle=throttle))
+        except CliUsageError as exc:
+            assert str(exc) == "-t/--throttle must be a finite number"
+        else:
+            raise AssertionError(f"expected CliUsageError for throttle={throttle}")
+
 def _cli_args(**overrides: CliValue):
     values: dict[str, CliValue] = {
         "novel_ids": [],

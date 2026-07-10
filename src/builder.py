@@ -182,17 +182,32 @@ def merge_cache_with_fetched(
     dropped from the output. Cache entries are only used to fill gaps the fresh
     fetch didn't cover, so a newly-fetched chapter always wins over its cache copy.
 
-    Order follows ``ep_list``; episodes with neither a fresh result nor a cache
-    entry are skipped.
+    The cache fallback only applies to episodes that were never attempted this
+    run at all (e.g. the chapters ``--retry-failed`` didn't select). An episode
+    that WAS attempted this run and failed must not silently fall back to a
+    possibly-stale cache entry from an earlier successful run -- that would
+    present old content as if it were freshly completed, contradicting the
+    failure recorded in ``failed_chapters.jsonl``. Such episodes are skipped
+    entirely instead.
+
+    Order follows ``ep_list``; episodes with neither a usable fresh result nor
+    an eligible cache entry are skipped.
     """
     # Index fresh results by episode number so we can overlay them on the cache
     # regardless of list position (retry-failed returns a filtered subset).
+    # Episodes attempted this run and failed are tracked separately so they can
+    # be excluded from the cache fallback below, rather than just being ignored.
     fresh_by_epi: dict[int, ChapterResult] = {}
+    failed_epi_nos: set[int] = set()
     for res in fetched_results:
-        if not res or "error" in res:
+        if not res:
             continue
         epi_no_raw = res.get("epi_no")
-        if isinstance(epi_no_raw, int):
+        if not isinstance(epi_no_raw, int):
+            continue
+        if "error" in res:
+            failed_epi_nos.add(epi_no_raw)
+        else:
             fresh_by_epi[epi_no_raw] = res
 
     cache = load_cache(book_dir) if os.path.isdir(os.path.join(book_dir, ".cache")) else {}
@@ -205,6 +220,10 @@ def merge_cache_with_fetched(
         fresh = fresh_by_epi.get(epi_no)
         if fresh is not None and fresh.get("html"):
             merged.append(fresh)
+            continue
+        if epi_no in failed_epi_nos:
+            # Attempted this run and failed -- do not silently substitute a
+            # possibly-stale cached copy; treat as not completed.
             continue
         cached = cache.get(epi_no)
         if cached is not None and cached.get("html"):

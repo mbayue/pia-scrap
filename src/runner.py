@@ -1,5 +1,6 @@
 import argparse
 import base64
+import math
 import os
 import re
 import sys
@@ -68,6 +69,8 @@ class CliUsageError(ValueError):
 def validate_queue_options(options: QueueOptions) -> None:
     if options.workers < 1:
         raise CliUsageError("-w/--workers must be at least 1")
+    if not math.isfinite(options.throttle):
+        raise CliUsageError("-t/--throttle must be a finite number")
     if options.throttle < 0:
         raise CliUsageError("-t/--throttle must be 0 or greater")
     if options.max_chapters < 0:

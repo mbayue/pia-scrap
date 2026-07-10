@@ -535,7 +535,7 @@ class NovelpiaClient:
                     assert direct_url is not None, "direct_url unavailable"
                     r = self.s.get(direct_url, timeout=self.timeout)
                     r.raise_for_status()
-                    cdata = r.json()
+                    cdata = _parse_episode_content_response(r)
                 break
             except Exception as e:
                 status_code = getattr(getattr(e, "response", None), "status_code", None)
@@ -679,7 +679,11 @@ def request_with_retries(
                     )
                     if recovered is not None:
                         r, did_refresh, did_login = recovered
-                        return r
+                        if r.status_code < 500:
+                            return r
+                        # Recovered response is still a server error; fall through to
+                        # the same >=500 handling below (known-block detection,
+                        # retry/raise) instead of bypassing it.
                 recovered_response = _handle_server_error(
                     r, attempt, max_retries, known_block_fn
                 )

@@ -13,7 +13,7 @@ from src.api import (
     detect_premium_episode_blocked,
     request_with_retries,
 )
-from src.contracts import ChapterResult, EpisodeItem
+from src.contracts import BlockKind, ChapterResult, EpisodeItem, format_block_label, parse_block_label
 
 
 class FakeResponse:
@@ -172,6 +172,38 @@ def test_request_with_retries_refreshes_on_500_token_expired(monkeypatch):
 
     assert response.status_code == 200
     assert session.calls == 2
+    assert refreshed == [True]
+
+
+def test_request_with_retries_retries_recovered_response_that_is_still_500(monkeypatch):
+    # Auth recovery can succeed and still receive a *different*, unrelated 500 on
+    # the retried request (e.g. a transient server hiccup right after re-login).
+    # That recovered-but-still-500 response must not bypass known-block detection
+    # and retry/backoff -- it should be handled exactly like a normal 500 instead
+    # of being returned to the caller immediately.
+    monkeypatch.setattr("src.api.time.sleep", lambda _: None)
+    session = FakeSession([
+        FakeResponse(500, {"errmsg": "The token has expired"}),
+        FakeResponse(500, {"errmsg": "Unrelated server hiccup"}),
+        FakeResponse(200, {"result": "ok"}),
+    ])
+    refreshed = []
+
+    def refresh() -> str:
+        refreshed.append(True)
+        return "new-token"
+
+    response = request_with_retries(
+        session,
+        "GET",
+        "https://api-global.novelpia.com/test",
+        allow_refresh=True,
+        refresh_fn=refresh,
+        max_retries=5,
+    )
+
+    assert response.status_code == 200
+    assert session.calls == 3
     assert refreshed == [True]
 
 
@@ -408,6 +440,12 @@ def test_known_api_block_error_formats_block_marker():
 
     assert str(error) == "premium episode blocked: novel_no=23 episode_no=2408"
 
+def test_parse_block_label_round_trips_all_block_kinds():
+    for kind in BlockKind:
+        label = format_block_label(kind, novel_no=23, episode_no=2408)
+
+        assert parse_block_label(label) == (kind, 23, 2408)
+
 def test_episode_ticket_classifies_ad_block_without_retrying(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
     client = NovelpiaClient(throttle=0)
@@ -549,6 +587,33 @@ def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):
         raise ApiShapeError("episode content response", "$.result.data", "object")
 
     monkeypatch.setattr(client, "episode_content", bad_content)
+
+    result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
+
+    assert result == {
+        "error": "episode content response expected object at $.result.data",
+        "epi_no": 123,
+        "epi_title": "Bad",
+        "idx": 4,
+    }
+
+
+def test_fetch_episode_returns_error_on_bad_direct_url_content_shape(monkeypatch):
+    # The direct_url branch (no _t token, only a content-endpoint URL) must run
+    # its response through _parse_episode_content_response just like the
+    # token_t/episode_content branch does, instead of trusting r.json() as-is.
+    client = NovelpiaClient(throttle=0)
+    monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {}})
+    monkeypatch.setattr(
+        "src.api.extract_t_token",
+        lambda _tdata: (None, "https://api-global.novelpia.com/v1/novel/episode/content?_t=plain-token"),
+    )
+
+    class DirectUrlSession:
+        def get(self, url, timeout=30):
+            return FakeResponse(200, {"result": {"data": []}}, url=url)
+
+    client.__dict__["s"] = DirectUrlSession()
 
     result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
 

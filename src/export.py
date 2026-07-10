@@ -48,7 +48,7 @@ _IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
 )
 
 
-def _sniff_image_ext(data: bytes) -> str | None:
+def sniff_image_extension(data: bytes) -> str | None:
     """Return a supported image extension by inspecting magic bytes, or None."""
     for signature, ext in _IMAGE_SIGNATURES:
         if not data.startswith(signature):
@@ -136,7 +136,7 @@ class ImageFetcher:
                     # real image as application/octet-stream with a non-image
                     # URL suffix). Fall back to sniffing the actual bytes
                     # before giving up.
-                    ext = _sniff_image_ext(resp.content)
+                    ext = sniff_image_extension(resp.content)
                 if ext is None:
                     return None
                 return resp.content, ext

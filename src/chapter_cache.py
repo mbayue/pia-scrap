@@ -358,12 +358,15 @@ def fetch_with_cache(
 
         incremental = on_result or make_incremental_cache_writer(book_dir, ep_list)
 
+        def routed_on_result(fetch_index: int, result: ChapterResult) -> None:
+            incremental(fetch_positions[fetch_index], result)
+
         try:
             fetched = client.fetch_episodes_parallel(
                 fetch_items,
                 max_workers=max(1, int(max_workers or 1)),
                 progress_cb=update_pbar,
-                on_result=incremental,
+                on_result=routed_on_result,
             )
         finally:
             pbar.close()

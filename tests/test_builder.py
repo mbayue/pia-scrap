@@ -1,7 +1,7 @@
 import json
 
 from src.api import AdRewardRequired, KnownApiBlockError, PremiumEpisodeBlocked
-from src.builder import build_epub, build_txt
+from src.builder import build_epub, build_txt, merge_cache_with_fetched
 from src.chapter_cache import (
     fetch_with_cache,
     load_cache,
@@ -258,6 +258,64 @@ def test_fetch_with_cache_on_result_caches_incrementally_on_cancel(tmp_path):
     }
 
 
+def test_fetch_with_cache_routes_on_result_index_to_original_ep_list_position(tmp_path):
+    # Regression: fetch_episodes_parallel calls on_result(idx, ...) with idx
+    # relative to the *fetch_items* subset it was given, not the full ep_list.
+    # When some early episodes are already cache-hits, fetch_items is a subset
+    # with smaller indices than their true position in ep_list. on_result must
+    # receive the correct ep_list-relative index, not the fetch_items-relative one.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    # Episodes 20 and 21 are already cached -> will be skipped (cache hits).
+    for epi_no, html in ((20, "cached-a"), (21, "cached-b")):
+        (cache_dir / f"{epi_no}.json").write_text(
+            json.dumps({"idx": 1, "epi_no": epi_no, "epi_title": f"Cached {epi_no}", "html": html}),
+            encoding="utf-8",
+        )
+
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 20, "epi_num": 1, "epi_title": "A"},  # cached, skipped
+        {"episode_no": 21, "epi_num": 2, "epi_title": "B"},  # cached, skipped
+        {"episode_no": 22, "epi_num": 3, "epi_title": "C"},  # fetched, fetch_items[0]
+        {"episode_no": 23, "epi_num": 4, "epi_title": "D"},  # fetched, fetch_items[1]
+    ]
+
+    class RecordingParallelClient(DummyClient):
+        def fetch_episodes_parallel(self, ep_list, max_workers=1, progress_cb=None, on_result=None):
+            results = []
+            for i, ep in enumerate(ep_list):
+                res = {"epi_no": ep.get("episode_no"), "html": f"h{i}", "epi_title": ep.get("epi_title", "")}
+                results.append(res)
+                if on_result is not None:
+                    # fetch_episodes_parallel's real semantics: idx is relative
+                    # to the list it was given (fetch_items), not the full ep_list.
+                    on_result(i, res)
+            return results
+
+    client = RecordingParallelClient([])
+    received: list[tuple[int, ChapterResult]] = []
+
+    def recording_on_result(index: int, result: ChapterResult) -> None:
+        received.append((index, result))
+
+    fetch_with_cache(
+        client,
+        episodes,
+        str(book_dir),
+        use_cache=True,
+        on_result=recording_on_result,
+    )
+
+    # fetch_items = [episodes[2], episodes[3]] (episode_no 22 and 23), called
+    # with fetch_episodes_parallel-relative indices 0 and 1. on_result must
+    # translate those back to their true ep_list positions: 2 and 3.
+    assert received == [
+        (2, {"epi_no": 22, "html": "h0", "epi_title": "C"}),
+        (3, {"epi_no": 23, "html": "h1", "epi_title": "D"}),
+    ]
+
+
 def test_fetch_with_cache_caches_even_when_use_cache_false(tmp_path):
     # Regression for the "save to .cache regardless of mode" requirement: a plain
     # fetch (no --update/--retry) must still persist every downloaded chapter so a
@@ -425,6 +483,17 @@ def test_select_episodes_applies_start_end_then_max():
     selected = select_episodes(episodes, ChapterSelection(start_chapter=2, end_chapter=4, max_chapters=2))
 
     assert [row.get("episode_no") for row in selected] == [11, 12]
+
+
+def test_select_episodes_keeps_malformed_epi_num_when_no_range_set():
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 11, "epi_num": "bad", "epi_title": "Two"},
+    ]
+
+    selected = select_episodes(episodes, ChapterSelection())
+
+    assert [row.get("episode_no") for row in selected] == [10, 11]
 
 
 def test_fetch_chapters_retry_failed_refetches_only_failed_cache_row(tmp_path):
@@ -900,3 +969,64 @@ def test_fetch_with_account_policy_closes_progress_bar_when_fetch_raises(tmp_pat
     assert fake_pbar is not None
     assert fake_pbar.closed
 
+
+
+def test_merge_cache_with_fetched_excludes_episode_that_failed_this_run(tmp_path):
+    # Regression: chapter 50 was cached by a prior successful run, but this
+    # run's fresh attempt to refetch it failed. The stale cache entry must NOT
+    # be silently used -- the episode should be dropped entirely, matching
+    # failed_chapters.jsonl (which records the failure independently).
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "50.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 50, "epi_title": "Fifty", "html": "<p>stale</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 50, "epi_num": 1, "epi_title": "Fifty"}]
+    fetched_results: list[ChapterResult] = [
+        {"error": "403 Client Error", "epi_no": 50, "epi_title": "Fifty"}
+    ]
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == []
+
+
+def test_merge_cache_with_fetched_falls_back_to_cache_for_unattempted_episode(tmp_path):
+    # Legitimate case: an episode not present in fetched_results at all (never
+    # attempted this run, e.g. --retry-failed's filtered subset) must still be
+    # filled in from .cache.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "60.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 60, "epi_title": "Sixty", "html": "<p>cached</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 60, "epi_num": 1, "epi_title": "Sixty"}]
+    fetched_results: list[ChapterResult] = []
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == [{"idx": 1, "epi_no": 60, "epi_title": "Sixty", "html": "<p>cached</p>"}]
+
+
+def test_merge_cache_with_fetched_prefers_fresh_result_over_cache(tmp_path):
+    # A fresh successful result for an episode always wins over its stale
+    # cache copy, regardless of the failed/unattempted distinction.
+    book_dir = tmp_path / "book"
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "70.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 70, "epi_title": "Seventy", "html": "<p>stale</p>"}),
+        encoding="utf-8",
+    )
+    ep_list: list[EpisodeItem] = [{"episode_no": 70, "epi_num": 1, "epi_title": "Seventy"}]
+    fetched_results: list[ChapterResult] = [
+        {"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}
+    ]
+
+    merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
+
+    assert merged == [{"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}]

@@ -56,15 +56,17 @@ def _episode_index(ep: EpisodeItem) -> int | None:
 
 
 def select_episodes(episodes: list[EpisodeItem], selection: ChapterSelection) -> list[EpisodeItem]:
+    needs_index = selection.start_chapter is not None or selection.end_chapter is not None
     selected: list[EpisodeItem] = []
     for ep in episodes:
-        index = _episode_index(ep)
-        if index is None:
-            continue
-        if selection.start_chapter is not None and index < selection.start_chapter:
-            continue
-        if selection.end_chapter is not None and index > selection.end_chapter:
-            continue
+        if needs_index:
+            index = _episode_index(ep)
+            if index is None:
+                continue
+            if selection.start_chapter is not None and index < selection.start_chapter:
+                continue
+            if selection.end_chapter is not None and index > selection.end_chapter:
+                continue
         selected.append(ep)
     if selection.max_chapters is not None:
         selected = selected[: selection.max_chapters]

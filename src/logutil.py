@@ -6,8 +6,16 @@ keeping output behaviour identical for callers/tests:
 * The package logger emits to **stdout** (not stderr) using a ``%(message)s``
   formatter, so existing ``capsys``-based assertions on ``[info]``/``[warn]``/
   ``[debug]`` text keep working.
-* The handler reads ``sys.stdout`` at *emit* time so test capture fixtures that
-  swap ``sys.stdout`` (e.g. ``pytest``'s ``capsys``) still receive the output.
+* The handler writes through ``tqdm.write()`` instead of a raw stream write.
+  ``tqdm`` keeps its progress bar on-screen with bare ``\\r`` (carriage return)
+  redraws and no trailing newline; a plain ``stream.write()`` from a log call
+  lands wherever the bar's cursor last stopped, so warnings/info lines appear
+  glued onto the end of the progress bar instead of starting their own line.
+  ``tqdm.write()`` clears any active bars, writes the message on a clean line,
+  then lets them redraw -- and falls back to a normal write when no bar is
+  active, so this is a no-op cost outside of fetch loops.
+* ``tqdm.write()`` reads ``sys.stdout`` at call time, so test capture fixtures
+  that swap ``sys.stdout`` (e.g. ``pytest``'s ``capsys``) still receive output.
 * Default level is ``DEBUG``; callers gate noisy output themselves (e.g. an
   ``if self.debug_dump:`` guard) before calling ``logger.debug(...)``.
 """
@@ -15,26 +23,30 @@ keeping output behaviour identical for callers/tests:
 import logging
 import sys
 
+from tqdm import tqdm
+
 _PACKAGE_LOGGER_NAME = "pia_scrap"
 
 
-class _StdoutStreamHandler(logging.StreamHandler):
-    """StreamHandler bound to the *current* ``sys.stdout`` at emit time.
+class _TqdmAwareStreamHandler(logging.StreamHandler):
+    """StreamHandler that writes through ``tqdm.write()`` instead of raw I/O.
 
-    ``logging.StreamHandler`` captures the stream object at construction, which
-    breaks under pytest's ``capsys`` (it replaces ``sys.stdout`` afterwards).
-    Re-binding here keeps emitted text inside the active capture fixture.
+    See the module docstring for why: a plain ``stream.write()`` corrupts an
+    active ``tqdm`` progress bar's line, and ``tqdm.write()`` is the library's
+    documented way to print alongside a running bar without that corruption.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.stream = sys.stdout
-        super().emit(record)
+        try:
+            tqdm.write(self.format(record), file=sys.stdout)
+        except Exception:  # noqa: BLE001 - match logging.Handler's own error policy
+            self.handleError(record)
 
 
 def _configure_package_logger() -> logging.Logger:
     logger = logging.getLogger(_PACKAGE_LOGGER_NAME)
     if not logger.handlers:
-        handler = _StdoutStreamHandler()
+        handler = _TqdmAwareStreamHandler()
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
