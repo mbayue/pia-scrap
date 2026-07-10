@@ -524,25 +524,20 @@ class NovelpiaClient:
             except Exception as e:
                 return {"error": _safe_error_message(e), "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
-            token_t, direct_url = extract_t_token(tdata)
-            if not token_t and not direct_url:
+            token_t = extract_t_token(tdata)
+            if not token_t:
                 return {"error": "no token found", "epi_no": epi_no, "epi_title": epi_title, "idx": idx}
 
             try:
-                if token_t:
-                    cdata = self.episode_content(token_t)
-                else:
-                    assert direct_url is not None, "direct_url unavailable"
-                    r = self.s.get(direct_url, timeout=self.timeout)
-                    r.raise_for_status()
-                    cdata = _parse_episode_content_response(r)
+                cdata = self.episode_content(token_t)
                 break
             except Exception as e:
                 status_code = getattr(getattr(e, "response", None), "status_code", None)
                 if status_code == 403 and attempt < CONTENT_FETCH_ATTEMPTS:
                     logger.warning(
-                        f"[warn] content access returned 403; retrying with a fresh "
-                        f"ticket in {RETRY_WAIT_SECONDS:.0f}s ({attempt}/{CONTENT_FETCH_ATTEMPTS})"
+                        f"[warn] chapter '{epi_title}' (episode_no={epi_no}): content access "
+                        f"returned 403; retrying with a fresh ticket in {RETRY_WAIT_SECONDS:.0f}s "
+                        f"({attempt}/{CONTENT_FETCH_ATTEMPTS})"
                     )
                     time.sleep(RETRY_WAIT_SECONDS)
                     continue

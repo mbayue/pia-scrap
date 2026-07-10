@@ -558,6 +558,26 @@ def test_fetch_episode_retries_with_fresh_ticket_on_transient_403(monkeypatch):
     assert sleeps == [1.0]
     assert session.calls == 4
 
+
+def test_fetch_episode_403_retry_warning_identifies_the_chapter(monkeypatch, capsys):
+    # The 403 retry warning must name which chapter is affected, not just show a
+    # bare "retrying" message -- otherwise a long multi-chapter run gives no way
+    # to tell which chapters hit trouble without -v.
+    session = FakeSession([
+        FakeResponse(200, {"result": {"_t": "ticket-token-1"}}),
+        FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
+        FakeResponse(200, {"result": {"_t": "ticket-token-2"}}),
+        FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
+    ])
+    client = NovelpiaClient(throttle=0)
+    client.__dict__["s"] = session
+    monkeypatch.setattr("src.api.time.sleep", lambda _seconds: None)
+
+    client.fetch_episode({"episode_no": 99, "epi_num": 5, "epi_title": "The Big Reveal"}, 5)
+
+    out = capsys.readouterr().out
+    assert "chapter 'The Big Reveal' (episode_no=99)" in out
+
 def test_fetch_episode_redacts_content_token_after_persistent_403(monkeypatch):
     # Every attempt mints its own fresh ticket (secret-token-1/2/3), and all
     # three content fetches 403 -- fetch_episode gives up after
@@ -587,33 +607,6 @@ def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):
         raise ApiShapeError("episode content response", "$.result.data", "object")
 
     monkeypatch.setattr(client, "episode_content", bad_content)
-
-    result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
-
-    assert result == {
-        "error": "episode content response expected object at $.result.data",
-        "epi_no": 123,
-        "epi_title": "Bad",
-        "idx": 4,
-    }
-
-
-def test_fetch_episode_returns_error_on_bad_direct_url_content_shape(monkeypatch):
-    # The direct_url branch (no _t token, only a content-endpoint URL) must run
-    # its response through _parse_episode_content_response just like the
-    # token_t/episode_content branch does, instead of trusting r.json() as-is.
-    client = NovelpiaClient(throttle=0)
-    monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {}})
-    monkeypatch.setattr(
-        "src.api.extract_t_token",
-        lambda _tdata: (None, "https://api-global.novelpia.com/v1/novel/episode/content?_t=plain-token"),
-    )
-
-    class DirectUrlSession:
-        def get(self, url, timeout=30):
-            return FakeResponse(200, {"result": {"data": []}}, url=url)
-
-    client.__dict__["s"] = DirectUrlSession()
 
     result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
 

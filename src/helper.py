@@ -311,10 +311,17 @@ def _content_url_token(s: str) -> tuple[str | None, str | None, bool]:
     return None, None, False
 
 
-def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    """Return (token, direct_content_url_or_none).
+def extract_t_token(tdata: Mapping[str, Any]) -> str | None:
+    """Return the ``_t`` token to use with the episode content endpoint.
+
     Prefer JWT-like tokens, but accept any non-empty string if present.
-    If using URL, accept any _t value on the official content endpoint.
+    Checks common keys at the top level and in nested dicts, then falls back
+    to scanning for a ``_t`` value embedded in the query string of a URL that
+    points at the official content endpoint (Novelpia sometimes nests the
+    token this way instead of as a bare key). Every case that yields a token
+    yields one usable directly as the ``_t`` query param for
+    ``NovelpiaClient.episode_content`` -- there is no case where only a
+    standalone content URL is available without also yielding its token.
     """
     res = tdata.get("result", {}) if isinstance(tdata, dict) else {}
     fallback_token: str | None = None
@@ -322,7 +329,7 @@ def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
     # 1) common keys at result
     jwt, fb = _scan_mapping_for_token(res)
     if jwt:
-        return jwt, None
+        return jwt
     fallback_token = fb
 
     # 2) nested dicts under result
@@ -331,7 +338,7 @@ def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
             if isinstance(v, dict):
                 j, fb2 = _scan_mapping_for_token(v)
                 if j:
-                    return j, None
+                    return j
                 fallback_token = fallback_token or fb2
 
     # 3) URL that is the official content endpoint with any _t
@@ -340,8 +347,6 @@ def extract_t_token(tdata: Mapping[str, Any]) -> tuple[str | None, str | None]:
             jwt, fb, is_url = _content_url_token(s)
             if is_url:
                 if jwt:
-                    return jwt, s
+                    return jwt
                 fallback_token = fallback_token or fb
-    if fallback_token:
-        return fallback_token, None
-    return None, None
+    return fallback_token
