@@ -8,7 +8,6 @@ from pathlib import Path
 BASE_URL = "https://global.novelpia.com"
 API_BASE = "https://api-global.novelpia.com"
 IMG_BASE_HTTPS = "https:"
-HTTP_LOG = False
 
 
 def config_path_for_runtime(executable: Path, frozen: bool) -> Path:
