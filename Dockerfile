@@ -11,8 +11,8 @@ WORKDIR /app
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-web.txt ./
+RUN pip install --no-cache-dir -r requirements-web.txt
 
 COPY src ./src
 COPY templates ./templates

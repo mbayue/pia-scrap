@@ -63,12 +63,20 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 ## Requirements
 
 * Python 3.10+
-* Packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `fastapi`, `uvicorn`, `PySocks`
+* Core packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `PySocks`, `lxml`
+* Web dashboard (optional): `fastapi`, `uvicorn`
 
-Install packages:
+Install packages (CLI only):
 
 ```bash
 pip install -r requirements.txt
+```
+
+Install packages including the web dashboard:
+
+```bash
+pip install -r requirements-web.txt
+# or: pip install -e ".[web]"
 ```
 
 ---
@@ -197,7 +205,7 @@ Mode behavior summary:
 Run a compact local dashboard from a browser:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-web.txt
 python -m uvicorn web_app:app --reload
 ```
 
@@ -277,7 +285,7 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 This repo uses `ruff` for linting and `pytest` for tests.
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-web.txt -e ".[dev]"
 ruff check .
 pytest            # runs the full suite (pythonpath is configured in pyproject.toml)
 ```
