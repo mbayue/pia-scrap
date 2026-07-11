@@ -19,11 +19,30 @@ logger = get_logger(__name__)
 # Helpers
 # ----------------------------
 
+
+def extract_genre_names(novel: dict[str, Any]) -> list[str]:
+    """Extract unique genre/tag names from a NovelResponse."""
+    result = novel.get("result", {})
+    nv = result.get("novel", {})
+    tag_items = result.get("tag_list") or nv.get("tag_list") or []
+    names: list[str] = []
+    for tag in tag_items:
+        if isinstance(tag, str):
+            names.append(tag)
+        elif isinstance(tag, dict):
+            name = tag.get("tag_name") or tag.get("name") or tag.get("title")
+            if isinstance(name, str):
+                names.append(name)
+    return list(dict.fromkeys(names))
+
+
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
+
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]+', "_", (name or "").strip()) or "book"
+
 
 def normalize_url(u: str) -> str:
     if not u:
@@ -33,6 +52,7 @@ def normalize_url(u: str) -> str:
     if u.startswith("/"):
         return urljoin(BASE_URL, u)
     return u
+
 
 def media_type_from_ext(ext: str) -> str:
     ext = ext.lower()
@@ -45,6 +65,7 @@ def media_type_from_ext(ext: str) -> str:
     if ext == ".webp":
         return "image/webp"
     return "image/jpeg"
+
 
 def looks_like_jwt(token: str | None) -> bool:
     if not isinstance(token, str):
@@ -59,10 +80,12 @@ def looks_like_jwt(token: str | None) -> bool:
             return False
     return True
 
+
 def kebab(s: str) -> str:
     s = (s or "").lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s or "book"
+
 
 def normalize_description(raw: str) -> str:
     """Convert Novelpia's synopsis text into plain text with real newlines.
@@ -77,14 +100,17 @@ def normalize_description(raw: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     return html_module.unescape(text).strip()
 
+
 # ----------------------------
 # Config/auth management
 # ----------------------------
+
 
 class AuthConfig(TypedDict, total=False):
     login_at: str
     userkey: str
     tkey: str
+
 
 @dataclass(frozen=True, slots=True)
 class CookieAuth:
@@ -92,8 +118,10 @@ class CookieAuth:
     userkey: str | None
     tkey: str | None
 
+
 def _clean_config_value(raw: object) -> str:
     return raw.strip() if isinstance(raw, str) else ""
+
 
 def normalize_auth_config(raw: Mapping[str, object]) -> AuthConfig:
     return {
@@ -101,6 +129,7 @@ def normalize_auth_config(raw: Mapping[str, object]) -> AuthConfig:
         "userkey": _clean_config_value(raw.get("userkey")),
         "tkey": _clean_config_value(raw.get("tkey")),
     }
+
 
 def load_config() -> AuthConfig:
     try:
@@ -114,6 +143,7 @@ def load_config() -> AuthConfig:
         logger.error(f"Error occurred while loading config: {e}")
         return {}
     return {}
+
 
 def save_config(cfg: Mapping[str, str | None]) -> None:
     tmp_path = ""
@@ -134,11 +164,12 @@ def save_config(cfg: Mapping[str, str | None]) -> None:
             except OSError:
                 pass
         logger.error(f"Error occurred while saving config: {e}")
-        pass
+
 
 # ----------------------------
 # Auth token management & header merging
 # ----------------------------
+
 
 def merge_login_at(headers: Mapping[str, str], login_at: str | None) -> dict[str, str]:
     h = dict(headers or {})
@@ -146,9 +177,19 @@ def merge_login_at(headers: Mapping[str, str], login_at: str | None) -> dict[str
         h["login-at"] = login_at
     return h
 
+
 SENSITIVE_KEY_PARTS = (
-    "pass", "passwd", "password", "authorization", "token",
-    "login-at", "login_at", "loginat", "_t", "cookie", "set-cookie",
+    "pass",
+    "passwd",
+    "password",
+    "authorization",
+    "token",
+    "login-at",
+    "login_at",
+    "loginat",
+    "_t",
+    "cookie",
+    "set-cookie",
 )
 
 
@@ -176,6 +217,7 @@ def _mask_value(v: Any) -> Any:
     except Exception:
         return "<masked>"
 
+
 def mask_kv(d: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if d is None:
         return d
@@ -187,16 +229,19 @@ def mask_kv(d: Mapping[str, Any] | None) -> dict[str, Any] | None:
             out[k] = _mask_value(v)
     return out
 
+
 def j(x: Any) -> str:
     try:
         return json.dumps(x, ensure_ascii=False)
     except Exception:
         return str(x)
 
+
 def load_netscape_cookies(path: str) -> MozillaCookieJar:
     jar = MozillaCookieJar()
     jar.load(path, ignore_discard=True, ignore_expires=True)
     return jar
+
 
 def load_netscape_cookies_text(cookie_text: str) -> MozillaCookieJar:
     jar = MozillaCookieJar()
@@ -212,6 +257,7 @@ def load_netscape_cookies_text(cookie_text: str) -> MozillaCookieJar:
             pass
     return jar
 
+
 def get_cookie_value(cookie_jar: CookieJar, name: str) -> str | None:
     target = name.lower()
     try:
@@ -222,6 +268,7 @@ def get_cookie_value(cookie_jar: CookieJar, name: str) -> str | None:
         logger.error(f"Error occurred while reading cookies: {e}")
     return None
 
+
 def cookie_auth_from_jar(cookie_jar: CookieJar, login_at_fallback: str | None = None) -> CookieAuth:
     return CookieAuth(
         login_at=get_cookie_value(cookie_jar, "LOGINAT")
@@ -231,8 +278,10 @@ def cookie_auth_from_jar(cookie_jar: CookieJar, login_at_fallback: str | None = 
         tkey=get_cookie_value(cookie_jar, "TKEY"),
     )
 
+
 def is_placeholder_userkey(userkey: str | None) -> bool:
     return userkey in {"login-user"}
+
 
 def attach_auth_cookies(session, headers: Mapping[str, str] | None = None) -> dict[str, str] | None:
     ck = getattr(session, "cookies", None)
@@ -256,9 +305,11 @@ def attach_auth_cookies(session, headers: Mapping[str, str] | None = None) -> di
 
     return dict(headers) if headers is not None else None
 
+
 # ----------------------------
 # Token extraction (STRICT)
 # ----------------------------
+
 
 def iter_strings(obj):
     if isinstance(obj, str):

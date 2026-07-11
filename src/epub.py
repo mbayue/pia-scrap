@@ -8,9 +8,9 @@ from ebooklib import epub
 from tqdm import tqdm
 
 from src.const import BASE_URL
-from src.contracts import ChapterResult, EpisodeItem, NovelResponse
+from src.contracts import ChapterResult, EpisodeItem, NovelResponse, chapter_is_error
 from src.export import EpubImageAdapter, ImageFetcher, sniff_image_extension
-from src.helper import ensure_dir, kebab, normalize_description, normalize_url
+from src.helper import ensure_dir, extract_genre_names, kebab, normalize_description, normalize_url
 from src.logutil import get_logger
 
 logger = get_logger(__name__)
@@ -34,9 +34,11 @@ class EpubClient(Protocol):
         on_result: Callable[[int, ChapterResult], None] | None = None,
     ) -> list[ChapterResult]: ...
 
+
 # ----------------------------
 # EPUB Builder
 # ----------------------------
+
 
 def _epub_date(raw: object) -> str | None:
     """Extract a ``YYYY-MM-DD`` date from Novelpia's ``"YYYY-MM-DD HH:MM:SS"``
@@ -51,21 +53,6 @@ def _epub_date(raw: object) -> str | None:
     return date_part
 
 
-def _genre_names(novel: NovelResponse) -> list[str]:
-    result = novel["result"]
-    nv = result["novel"]
-    tag_items = result.get("tag_list") or nv.get("tag_list") or []
-    names: list[str] = []
-    for tag in tag_items:
-        if isinstance(tag, str):
-            names.append(tag)
-            continue
-        if isinstance(tag, dict):
-            name = tag.get("tag_name") or tag.get("name") or tag.get("title")
-            if isinstance(name, str):
-                names.append(name)
-    return list(dict.fromkeys(names))
-
 class EpubBuilder:
     def __init__(self, out_dir: str, debug_dump: bool = False):
         self.out_dir = out_dir
@@ -76,18 +63,27 @@ class EpubBuilder:
     def _fetch_bytes(self, client: EpubClient, url: str) -> bytes | None:
         return self._image_fetcher.fetch_bytes(client, url)
 
-    def build(self, client: EpubClient, novel: NovelResponse, episodes: list[EpisodeItem],
-              filename_hint: str | None = None, language: str = "en",
-              author_fallback: str = "Unknown", css_text: str | None = None,
-              novel_id: int | None = None, fetched_results: list[ChapterResult] | None = None,
-              max_workers: int = 1) -> tuple[str, str, int]:
+    def build(
+        self,
+        client: EpubClient,
+        novel: NovelResponse,
+        episodes: list[EpisodeItem],
+        filename_hint: str | None = None,
+        language: str = "en",
+        author_fallback: str = "Unknown",
+        css_text: str | None = None,
+        novel_id: int | None = None,
+        fetched_results: list[ChapterResult] | None = None,
+        max_workers: int = 1,
+    ) -> tuple[str, str, int]:
         result = novel["result"]
         nv = result["novel"]
-        title = nv.get("novel_name", f"novel_{nv.get('novel_no','')}")
+        title = nv.get("novel_name", f"novel_{nv.get('novel_no', '')}")
         writers = result.get("writer_list") or []
         author = (writers[0].get("writer_name") if writers else None) or author_fallback
         status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
         description = normalize_description(nv.get("novel_story") or "")
+        genres = extract_genre_names(novel)
 
         book = epub.EpubBook()
         book.set_identifier(f"novelpia-{nv.get('novel_no')}")
@@ -98,7 +94,7 @@ class EpubBuilder:
         if description:
             book.add_metadata("DC", "description", description)
 
-        for genre in _genre_names(novel):
+        for genre in genres:
             book.add_metadata("DC", "subject", genre)
 
         src_url = f"{BASE_URL}/novel/{novel_id}" if novel_id else ""
@@ -145,8 +141,9 @@ class EpubBuilder:
             .epi-title { font-size: 1.4em; font-weight: 600; margin: 0 0 0.6em; }
             """
         )
-        style = epub.EpubItem(uid="style", file_name="style/main.css",
-                              media_type="text/css", content=default_css.encode("utf-8"))
+        style = epub.EpubItem(
+            uid="style", file_name="style/main.css", media_type="text/css", content=default_css.encode("utf-8")
+        )
         book.add_item(style)
 
         spine: list[str | epub.EpubHtml] = ["nav"]
@@ -173,7 +170,7 @@ class EpubBuilder:
                 pbar.close()
 
         for i, res in enumerate(fetched_results, 1):
-            if not res or "error" in res:
+            if not res or chapter_is_error(res):
                 err = res.get("error") if res else "Unknown error"
                 logger.warning(f"[warn] Failed to fetch chapter {i}: {err}")
                 continue
@@ -188,10 +185,10 @@ class EpubBuilder:
                 file_name=f"chap_{i:04d}.xhtml",
                 lang=language,
                 content=(
-                    f"<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+                    f'<html xmlns="http://www.w3.org/1999/xhtml">'
                     f"<head><title>{html.escape(epi_title)}</title>"
-                    f"<link rel=\"stylesheet\" href=\"style/main.css\"/></head>"
-                    f"<body><h2 class=\"epi-title\">{html.escape(epi_title)}</h2>{html_text}</body></html>"
+                    f'<link rel="stylesheet" href="style/main.css"/></head>'
+                    f'<body><h2 class="epi-title">{html.escape(epi_title)}</h2>{html_text}</body></html>'
                 ),
             )
 
@@ -214,7 +211,6 @@ class EpubBuilder:
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
         meta_parts.append(f"<p><strong>Status:</strong> {html.escape(status)}</p>")
-        genres = _genre_names(novel)
         if genres:
             meta_parts.append(f"<p><strong>Genre:</strong> {html.escape(', '.join(genres))}</p>")
         if src_url:
@@ -224,7 +220,8 @@ class EpubBuilder:
             meta_parts.append(f"<p>{escaped_description}</p>")
         meta_html = (
             "<html><head><link rel='stylesheet' href='style/main.css'/></head><body>"
-             + "".join(meta_parts) + "</body></html>"
+            + "".join(meta_parts)
+            + "</body></html>"
         )
         about = epub.EpubHtml(title="About", file_name="about.xhtml", lang=language, content=meta_html)
         book.add_item(about)
@@ -244,4 +241,4 @@ class EpubBuilder:
         ensure_dir(book_dir)
         out_path = os.path.join(book_dir, f"{base}.epub")
         epub.write_epub(out_path, book, {})
-        return out_path, title, len([r for r in fetched_results if r and "error" not in r])
+        return out_path, title, len([r for r in fetched_results if r and not chapter_is_error(r)])

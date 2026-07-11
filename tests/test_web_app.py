@@ -8,6 +8,7 @@ from web_app import (
     MAX_STORED_JOBS,
     JobRequest,
     JobState,
+    _job_semaphore,
     _prune_finished_jobs_locked,
     create_job,
     download,
@@ -15,7 +16,17 @@ from web_app import (
     index,
     jobs,
     jobs_lock,
+    list_jobs,
 )
+
+
+def _drain_semaphore():
+    """Drain all permits from the job semaphore so tests aren't rate-limited."""
+    while _job_semaphore.acquire(blocking=False):
+        pass
+    # Re-release MAX_CONCURRENT_JOBS permits
+    for _ in range(4):
+        _job_semaphore.release()
 
 
 def job_state(status: str, created_at: str) -> JobState:
@@ -32,6 +43,7 @@ def job_state(status: str, created_at: str) -> JobState:
         "skipped_ids": [],
         "error": None,
     }
+
 
 class DummyThread:
     def __init__(self, *args, **kwargs):
@@ -59,6 +71,7 @@ def test_prune_finished_jobs_preserves_active_jobs():
 
 def test_create_job_and_get_job_without_starting_worker(monkeypatch):
     monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    _drain_semaphore()
     with jobs_lock:
         jobs.clear()
 
@@ -74,6 +87,7 @@ def test_create_job_and_get_job_without_starting_worker(monkeypatch):
 
 def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
     monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    _drain_semaphore()
     with jobs_lock:
         jobs.clear()
 
@@ -88,6 +102,7 @@ def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
 
 def test_create_job_creates_new_job_for_partial_batch_overlap(monkeypatch):
     monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    _drain_semaphore()
     with jobs_lock:
         jobs.clear()
 
@@ -103,6 +118,7 @@ def test_create_job_creates_new_job_for_partial_batch_overlap(monkeypatch):
 
 def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch):
     monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    _drain_semaphore()
     with jobs_lock:
         jobs.clear()
 
@@ -116,11 +132,28 @@ def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch)
     with jobs_lock:
         jobs.clear()
 
+
 def test_index_serves_template_html():
     html = index()
 
     assert "<title>PIA Scrap</title>" in html
     assert 'id="job-form"' in html
+
+
+def test_list_jobs_returns_all_jobs(monkeypatch):
+    _drain_semaphore()
+    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    with jobs_lock:
+        jobs.clear()
+
+    create_job(JobRequest(novel_text="5522"))
+    result = list_jobs()
+    assert len(result) == 1
+    assert result[0]["status"] == "queued"
+    assert result[0]["novel_ids"] == [5522]
+    with jobs_lock:
+        jobs.clear()
+
 
 def test_download_serves_finished_file_inside_project(monkeypatch, tmp_path):
     out_file = tmp_path / "book.epub"
@@ -129,19 +162,22 @@ def test_download_serves_finished_file_inside_project(monkeypatch, tmp_path):
     with jobs_lock:
         jobs.clear()
         jobs["job"] = job_state("done", "2000-01-01T00:00:00")
-        jobs["job"]["rows"] = [{
-            "novel_id": 49,
-            "status": "epub",
-            "chapters": 1,
-            "title": "Book",
-            "path": str(out_file),
-        }]
+        jobs["job"]["rows"] = [
+            {
+                "novel_id": 49,
+                "status": "epub",
+                "chapters": 1,
+                "title": "Book",
+                "path": str(out_file),
+            }
+        ]
 
     response = download("job", 0)
 
     assert response.path == str(out_file)
     with jobs_lock:
         jobs.clear()
+
 
 def test_download_rejects_file_outside_project(monkeypatch, tmp_path):
     project = tmp_path / "project"
@@ -152,13 +188,15 @@ def test_download_rejects_file_outside_project(monkeypatch, tmp_path):
     with jobs_lock:
         jobs.clear()
         jobs["job"] = job_state("done", "2000-01-01T00:00:00")
-        jobs["job"]["rows"] = [{
-            "novel_id": 49,
-            "status": "epub",
-            "chapters": 1,
-            "title": "Book",
-            "path": str(outside),
-        }]
+        jobs["job"]["rows"] = [
+            {
+                "novel_id": 49,
+                "status": "epub",
+                "chapters": 1,
+                "title": "Book",
+                "path": str(outside),
+            }
+        ]
 
     try:
         download("job", 0)
@@ -186,13 +224,15 @@ def test_downloadable_path_rejects_symlink_escape(monkeypatch, tmp_path):
     with jobs_lock:
         jobs.clear()
         jobs["job"] = job_state("done", "2000-01-01T00:00:00")
-        jobs["job"]["rows"] = [{
-            "novel_id": 49,
-            "status": "epub",
-            "chapters": 1,
-            "title": "Book",
-            "path": str(symlink_path),
-        }]
+        jobs["job"]["rows"] = [
+            {
+                "novel_id": 49,
+                "status": "epub",
+                "chapters": 1,
+                "title": "Book",
+                "path": str(symlink_path),
+            }
+        ]
 
     try:
         downloadable_path("job", 0, project_root=str(base))
@@ -222,6 +262,7 @@ def test_download_rejects_unknown_row():
 
 def test_concurrent_jobs_keep_separate_progress_sinks():
     """Regression: tqdm progress must route to the correct job's logs, never cross-talk."""
+    _drain_semaphore()
     original_run_queue = web_jobs_module.run_queue
 
     def fake_run_queue(novel_ids, options, log=lambda m: None):

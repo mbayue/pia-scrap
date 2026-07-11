@@ -229,3 +229,5 @@ sync-output-to-gdrive.bat
 .omop
 .omo
 .venv-build
+ranking_batch_*.txt
+ranking_novels*.txt

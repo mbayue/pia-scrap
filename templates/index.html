@@ -25,6 +25,7 @@
       --success-soft: #f0fdf4;
       --info: #2563eb;
       --info-soft: #eff6ff;
+      --warning: #d97706;
       --warning-soft: #fffbeb;
       --terminal: #09090b;
       --terminal-text: #e4e4e7;
@@ -32,6 +33,56 @@
       --radius-sm: 10px;
       --shadow: 0 1px 2px rgba(24, 24, 27, .06), 0 12px 32px rgba(24, 24, 27, .06);
       --space: 16px;
+      --progress-bg: #e4e4e7;
+      --progress-fill: var(--info);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --background: #09090b;
+        --foreground: #fafafa;
+        --card: #18181b;
+        --card-soft: #27272a;
+        --muted: #a1a1aa;
+        --muted-foreground: #d4d4d8;
+        --border: #27272a;
+        --input: #3f3f46;
+        --primary: #fafafa;
+        --primary-foreground: #18181b;
+        --secondary: #27272a;
+        --secondary-foreground: #e4e4e7;
+        --destructive-soft: #2d1b1b;
+        --success-soft: #14261c;
+        --info-soft: #1b2a3d;
+        --warning-soft: #2d2416;
+        --terminal: #000000;
+        --terminal-text: #d4d4d8;
+        --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+        --progress-bg: #3f3f46;
+      }
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --background: #09090b;
+      --foreground: #fafafa;
+      --card: #18181b;
+      --card-soft: #27272a;
+      --muted: #a1a1aa;
+      --muted-foreground: #d4d4d8;
+      --border: #27272a;
+      --input: #3f3f46;
+      --primary: #fafafa;
+      --primary-foreground: #18181b;
+      --secondary: #27272a;
+      --secondary-foreground: #e4e4e7;
+      --destructive-soft: #2d1b1b;
+      --success-soft: #14261c;
+      --info-soft: #1b2a3d;
+      --warning-soft: #2d2416;
+      --terminal: #000000;
+      --terminal-text: #d4d4d8;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
+      --progress-bg: #3f3f46;
     }
     * { box-sizing: border-box; }
     html { min-height: 100%; }
@@ -125,7 +176,7 @@
       border: 1px solid var(--input);
       border-radius: var(--radius-sm);
       padding: 9px 11px;
-      background: #fff;
+      background: var(--card);
       color: var(--foreground);
       outline: none;
       transition: border-color .15s ease, box-shadow .15s ease;
@@ -219,10 +270,10 @@
       display: none;
       margin-bottom: 14px;
       padding: 11px 12px;
-      border: 1px solid #fecaca;
+      border: 1px solid var(--destructive);
       border-radius: var(--radius-sm);
       background: var(--destructive-soft);
-      color: #991b1b;
+      color: var(--destructive);
       font-size: 13px;
       font-weight: 650;
     }
@@ -230,10 +281,10 @@
     .status-card { position: sticky; top: 18px; }
     .status-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
     .status.idle { background: var(--secondary); color: var(--muted-foreground); }
-    .status.queued { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
-    .status.running { background: var(--info-soft); color: #1d4ed8; border-color: #bfdbfe; }
-    .status.done { background: var(--success-soft); color: var(--success); border-color: #bbf7d0; }
-    .status.failed { background: var(--destructive-soft); color: var(--destructive); border-color: #fecaca; }
+    .status.queued { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+    .status.running { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+    .status.done { background: var(--success-soft); color: var(--success); border-color: var(--success); }
+    .status.failed { background: var(--destructive-soft); color: var(--destructive); border-color: var(--destructive); }
     .meta { display: grid; gap: 7px; margin: 12px 0; }
     .meta-row { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 13px; }
     .meta-row strong { color: var(--foreground); font-weight: 650; }
@@ -260,7 +311,7 @@
       cursor: pointer;
     }
     .recent-job:hover { transform: none; border-color: var(--input); }
-    .recent-job.active { border-color: #bfdbfe; background: var(--info-soft); }
+    .recent-job.active { border-color: var(--info); background: var(--info-soft); }
     .recent-job-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 750; }
     .recent-job-status { color: var(--muted); font-size: 12px; font-weight: 750; }
     .empty-state {
@@ -284,7 +335,7 @@
       white-space: pre-wrap;
       font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
-    .terminal.empty { color: #a1a1aa; }
+    .terminal.empty { color: var(--muted); }
     .table-wrap { overflow-x: auto; }
     .table-wrap.hidden { display: none; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -326,7 +377,10 @@
         <h1>PIA Scrap</h1>
         <p class="eyebrow">Novelpia → EPUB queue runner</p>
       </div>
-      <span class="badge">Local FastAPI App</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="theme-toggle" class="secondary" type="button" style="min-height:32px;padding:0 10px;font-size:13px;" aria-label="Toggle dark mode">Theme</button>
+        <span class="badge">Local FastAPI App</span>
+      </div>
     </header>
 
     <div class="layout">
@@ -425,6 +479,15 @@
         </div>
         <div class="card-body">
           <div id="job-empty" class="empty-state">Start a job to see progress, logs, and downloads here.</div>
+          <div id="progress-wrap" style="display:none;margin:12px 0;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span id="progress-label" style="font-size:13px;font-weight:650;">Progress</span>
+              <span id="progress-pct" style="font-size:13px;font-weight:750;color:var(--info);">0%</span>
+            </div>
+            <div style="height:8px;border-radius:999px;background:var(--progress-bg);overflow:hidden;">
+              <div id="progress-bar" style="height:100%;width:0%;border-radius:999px;background:var(--info);transition:width .3s ease;"></div>
+            </div>
+          </div>
           <div class="meta" aria-label="Job metadata">
             <div class="meta-row"><span>Created at</span><strong id="created-at">—</strong></div>
             <div class="meta-row"><span>Started at</span><strong id="started-at">—</strong></div>
@@ -435,7 +498,10 @@
             <div id="recent-empty" class="empty-state">No recent jobs yet.</div>
             <div id="recent-jobs" class="recent-jobs" aria-label="Recent jobs"></div>
           </div>
-          <h3>Logs</h3>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;">
+            <h3 style="margin:0;">Logs</h3>
+            <input id="log-filter" type="text" placeholder="Filter logs..." style="width:180px;min-height:30px;padding:4px 8px;font-size:12px;">
+          </div>
           <pre id="logs" class="terminal empty">No logs yet.</pre>
           <div class="section-title">
             <h3>Results</h3>
@@ -470,11 +536,75 @@ const tableWrap = document.querySelector(".table-wrap");
 const createdAtEl = document.querySelector("#created-at");
 const startedAtEl = document.querySelector("#started-at");
 const finishedAtEl = document.querySelector("#finished-at");
+const progressWrap = document.querySelector("#progress-wrap");
+const progressBar = document.querySelector("#progress-bar");
+const progressPct = document.querySelector("#progress-pct");
+const progressLabel = document.querySelector("#progress-label");
+const logFilter = document.querySelector("#log-filter");
+const themeToggle = document.querySelector("#theme-toggle");
 let pollTimer = null;
+let allLogs = [];
 const activeJobKey = "pia-scrap.activeJobId";
 const recentJobsKey = "pia-scrap.recentJobs";
 const downloadedJobsKey = "pia-scrap.downloadedJobs";
+const themeKey = "pia-scrap.theme";
 let activeJobId = localStorage.getItem(activeJobKey);
+
+// Dark mode
+function getPreferredTheme() {
+  const saved = localStorage.getItem(themeKey);
+  if (saved) return saved;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  themeToggle.textContent = theme === "dark" ? "Light" : "Dark";
+}
+applyTheme(getPreferredTheme());
+themeToggle.addEventListener("click", () => {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  const next = current === "dark" ? "light" : "dark";
+  applyTheme(next);
+  localStorage.setItem(themeKey, next);
+});
+
+// Progress bar
+function updateProgress(job) {
+  const rows = job.rows || [];
+  const total = rows.length || 1;
+  const done = rows.filter(r => r.status === "epub" || r.status === "txt" || r.status === "no updates").length;
+  const pct = job.status === "done" ? 100 : job.status === "failed" ? 100 : Math.round((done / total) * 100);
+  if (job.status === "queued" || job.status === "running") {
+    progressWrap.style.display = "block";
+    progressBar.style.width = pct + "%";
+    progressPct.textContent = pct + "%";
+    progressBar.style.background = "var(--info)";
+    progressLabel.textContent = job.status === "queued" ? "Queued..." : "Downloading...";
+  } else if (job.status === "done") {
+    progressWrap.style.display = "block";
+    progressBar.style.width = "100%";
+    progressPct.textContent = "100%";
+    progressBar.style.background = "var(--success)";
+    progressLabel.textContent = "Complete";
+  } else if (job.status === "failed") {
+    progressWrap.style.display = "block";
+    progressBar.style.width = "100%";
+    progressPct.textContent = "Failed";
+    progressBar.style.background = "var(--destructive)";
+    progressLabel.textContent = "Failed";
+  } else {
+    progressWrap.style.display = "none";
+  }
+}
+
+// Log filter
+logFilter.addEventListener("input", () => {
+  const q = logFilter.value.toLowerCase();
+  const filtered = q ? allLogs.filter(l => l.toLowerCase().includes(q)) : allLogs;
+  logsEl.textContent = filtered.length ? filtered.join("\n") : "No logs match filter.";
+  logsEl.classList.toggle("empty", !filtered.length);
+  logsEl.scrollTop = logsEl.scrollHeight;
+});
 
 function value(name) {
   const input = form.elements[name];
@@ -608,10 +738,13 @@ function render(job) {
   startedAtEl.textContent = job.started_at || "—";
   finishedAtEl.textContent = job.finished_at || "—";
   rememberRecentJob(job);
+  updateProgress(job);
 
-  const logs = job.logs || [];
-  logsEl.textContent = logs.length ? logs.join("\n") : "No logs yet.";
-  logsEl.classList.toggle("empty", !logs.length);
+  allLogs = job.logs || [];
+  const q = logFilter.value.toLowerCase();
+  const filtered = q ? allLogs.filter(l => l.toLowerCase().includes(q)) : allLogs;
+  logsEl.textContent = filtered.length ? filtered.join("\n") : "No logs yet.";
+  logsEl.classList.toggle("empty", !filtered.length);
   logsEl.scrollTop = logsEl.scrollHeight;
 
   rowsEl.innerHTML = "";
@@ -731,8 +864,10 @@ form.addEventListener("submit", async (event) => {
   setRunning(true);
   setStatus("queued");
   jobEmpty.style.display = "none";
+  allLogs = [];
   logsEl.textContent = "No logs yet.";
   logsEl.classList.add("empty");
+  logFilter.value = "";
   rowsEl.innerHTML = "";
   resultCardsEl.innerHTML = "";
   resultsEmpty.style.display = "block";
@@ -740,6 +875,8 @@ form.addEventListener("submit", async (event) => {
   createdAtEl.textContent = "—";
   startedAtEl.textContent = "—";
   finishedAtEl.textContent = "—";
+  progressWrap.style.display = "none";
+  progressBar.style.width = "0%";
 
   try {
     const res = await fetch("/api/jobs", {

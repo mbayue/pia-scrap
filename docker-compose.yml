@@ -1,0 +1,11 @@
+services:
+  pia-scrap:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./output:/app/output
+    environment:
+      - OUTPUT_RETENTION_DAYS=30
+    restart: unless-stopped

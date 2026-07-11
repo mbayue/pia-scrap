@@ -106,6 +106,7 @@ class BuilderClient(DummyClient):
         self.calls.append(("episode_list", novel_id, rows))
         return {"result": {"list": [{"episode_no": 80, "epi_num": 1, "epi_title": "Paid"}]}}
 
+
 class PartialBuilderClient(BuilderClient):
     def episode_list(self, novel_id: int, rows: int) -> "EpisodeListResponse":
         self.calls.append(("episode_list", novel_id, rows))
@@ -118,6 +119,7 @@ class PartialBuilderClient(BuilderClient):
                 ]
             }
         }
+
 
 class ProbePremiumClient(PartialBuilderClient):
     def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> dict[str, str]:
@@ -242,8 +244,9 @@ def test_fetch_with_cache_on_result_caches_incrementally_on_cancel(tmp_path):
         {"episode_no": 20, "epi_num": 1, "epi_title": "A"},
         {"episode_no": 21, "epi_num": 2, "epi_title": "B"},
     ]
-    client = SlowInterruptClient([{"epi_no": 20, "html": "h0", "epi_title": "A"},
-                                  {"epi_no": 21, "html": "h1", "epi_title": "B"}])
+    client = SlowInterruptClient(
+        [{"epi_no": 20, "html": "h0", "epi_title": "A"}, {"epi_no": 21, "html": "h1", "epi_title": "B"}]
+    )
     writer = make_incremental_cache_writer(str(book_dir), episodes)
     try:
         fetch_with_cache(client, episodes, str(book_dir), use_cache=True, on_result=writer)
@@ -253,9 +256,7 @@ def test_fetch_with_cache_on_result_caches_incrementally_on_cancel(tmp_path):
     # Only the first chapter was fetched before cancel -> it must be cached.
     assert (cache_dir / "20.json").exists()
     assert not (cache_dir / "21.json").exists()
-    assert load_cache(str(book_dir)) == {
-        20: {"idx": 1, "epi_no": 20, "epi_title": "A", "html": "h0"}
-    }
+    assert load_cache(str(book_dir)) == {20: {"idx": 1, "epi_no": 20, "epi_title": "A", "html": "h0"}}
 
 
 def test_fetch_with_cache_routes_on_result_index_to_original_ep_list_position(tmp_path):
@@ -321,10 +322,12 @@ def test_fetch_with_cache_caches_even_when_use_cache_false(tmp_path):
     # fetch (no --update/--retry) must still persist every downloaded chapter so a
     # cancel/error mid-run keeps partial progress.
     book_dir = tmp_path / "book"
-    client = DummyClient([
-        {"epi_no": 20, "html": "a", "epi_title": "A"},
-        {"epi_no": 21, "html": "b", "epi_title": "B"},
-    ])
+    client = DummyClient(
+        [
+            {"epi_no": 20, "html": "a", "epi_title": "A"},
+            {"epi_no": 21, "html": "b", "epi_title": "B"},
+        ]
+    )
     episodes: list[EpisodeItem] = [
         {"episode_no": 20, "epi_num": 1, "epi_title": "A"},
         {"episode_no": 21, "epi_num": 2, "epi_title": "B"},
@@ -347,9 +350,7 @@ def test_write_cache_item_if_absent_never_overwrites_existing(tmp_path):
         encoding="utf-8",
     )
 
-    wrote = write_cache_item_if_absent(
-        str(book_dir), {"idx": 9, "epi_no": 20, "epi_title": "Fresh", "html": "fresh"}
-    )
+    wrote = write_cache_item_if_absent(str(book_dir), {"idx": 9, "epi_no": 20, "epi_title": "Fresh", "html": "fresh"})
 
     assert wrote is False
     row = json.loads((cache_dir / "20.json").read_text(encoding="utf-8"))
@@ -471,6 +472,7 @@ def test_select_episodes_skips_malformed_epi_num():
     ]
     selected = select_episodes(episodes, ChapterSelection(start_chapter=2))
     assert [row.get("episode_no") for row in selected] == [13]
+
 
 def test_select_episodes_applies_start_end_then_max():
     episodes: list[EpisodeItem] = [
@@ -601,6 +603,7 @@ def test_fetch_chapters_update_no_op_when_all_requested_chapters_are_cached(tmp_
     assert results[0].get("html") == "cached"
     assert client.calls == []
 
+
 def test_fetch_chapters_free_policy_unlocks_ads_then_stops_at_premium(tmp_path):
     book_dir = tmp_path / "book"
     client = DummyClient(
@@ -637,6 +640,7 @@ def test_fetch_chapters_free_policy_unlocks_ads_then_stops_at_premium(tmp_path):
         ([episodes[2]], 1, {"ticket": "42"}),
     ]
 
+
 def test_fetch_chapters_free_policy_logs_ad_gated_info_once(tmp_path, capsys):
     book_dir = tmp_path / "book"
     client = DummyClient(
@@ -661,6 +665,7 @@ def test_fetch_chapters_free_policy_logs_ad_gated_info_once(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.count("ad-gated chapters detected") == 1
 
+
 def test_fetch_chapters_paid_policy_keeps_parallel_path_without_reward(tmp_path):
     book_dir = tmp_path / "book"
     client = DummyClient([{"epi_no": 50, "html": "paid", "epi_title": "Paid"}])
@@ -676,6 +681,7 @@ def test_fetch_chapters_paid_policy_keeps_parallel_path_without_reward(tmp_path)
     assert fetched_count == 1
     assert results[0].get("html") == "paid"
     assert client.calls == [(episodes, 3)]
+
 
 def test_fetch_chapters_free_policy_treats_malformed_block_as_normal_failure(tmp_path):
     book_dir = tmp_path / "book"
@@ -704,6 +710,7 @@ def test_fetch_chapters_free_policy_treats_malformed_block_as_normal_failure(tmp
     assert failed_rows[0]["epi_no"] == 70
     assert client.calls == [([episodes[0]], 1, None), ([episodes[1]], 1, None)]
 
+
 def test_build_txt_uses_paid_account_status_for_parallel_fetch_without_reward(tmp_path):
     client = BuilderClient(
         {"statusCode": "200", "result": {"login": {"mem_nick": "Paid", "mem_plus_type": "1"}}},
@@ -718,6 +725,7 @@ def test_build_txt_uses_paid_account_status_for_parallel_fetch_without_reward(tm
     assert ([{"episode_no": 80, "epi_num": 1, "epi_title": "Paid"}], 4) in client.calls
     assert ([{"episode_no": 80, "reward": True}], 1) not in client.calls
 
+
 def test_build_txt_uses_free_account_status_for_reward_flow(tmp_path):
     client = BuilderClient(
         {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
@@ -731,6 +739,7 @@ def test_build_txt_uses_free_account_status_for_reward_flow(tmp_path):
 
     assert total == 1
     assert ([{"episode_no": 80, "reward": True}], 1) in client.calls
+
 
 def test_build_txt_preserves_partial_output_after_premium_stop(tmp_path):
     client = PartialBuilderClient(
@@ -759,6 +768,7 @@ def test_build_txt_preserves_partial_output_after_premium_stop(tmp_path):
         "html": "<p>one</p>",
     }
 
+
 def test_build_txt_preserves_partial_output_when_reward_probe_hits_premium(tmp_path):
     client = ProbePremiumClient(
         {"statusCode": "200", "result": {"login": {"mem_nick": "Free", "mem_plus_type": 0}}},
@@ -777,6 +787,7 @@ def test_build_txt_preserves_partial_output_when_reward_probe_hits_premium(tmp_p
     assert not (output_dir / "2_Premium.txt").exists()
     assert not (output_dir / "failed_chapters.jsonl").exists()
     assert ([{"episode_no": 82, "reward": True}], 1) in client.calls
+
 
 def test_build_epub_preserves_partial_output_after_premium_stop(monkeypatch, tmp_path):
     written = []
@@ -904,6 +915,7 @@ def test_build_txt_retry_failed_noop_when_no_failed_chapters(tmp_path):
     assert total == 0
     assert not (output_dir / "1_One.txt").exists()
 
+
 def test_fetch_with_cache_closes_progress_bar_when_parallel_fetch_raises(tmp_path, monkeypatch):
     book_dir = tmp_path / "book"
     book_dir.mkdir()
@@ -935,8 +947,6 @@ def test_fetch_with_cache_closes_progress_bar_when_parallel_fetch_raises(tmp_pat
     assert fake_pbar.closed
 
 
-
-
 def test_fetch_with_account_policy_closes_progress_bar_when_fetch_raises(tmp_path, monkeypatch):
     book_dir = tmp_path / "book"
     book_dir.mkdir()
@@ -960,6 +970,7 @@ def test_fetch_with_account_policy_closes_progress_bar_when_fetch_raises(tmp_pat
 
     try:
         from src.chapter_cache import fetch_with_account_policy
+
         fetch_with_account_policy(client, [{"episode_no": 1}, {"episode_no": 2}], str(book_dir))
     except ValueError:
         pass
@@ -968,7 +979,6 @@ def test_fetch_with_account_policy_closes_progress_bar_when_fetch_raises(tmp_pat
 
     assert fake_pbar is not None
     assert fake_pbar.closed
-
 
 
 def test_merge_cache_with_fetched_excludes_episode_that_failed_this_run(tmp_path):
@@ -984,9 +994,7 @@ def test_merge_cache_with_fetched_excludes_episode_that_failed_this_run(tmp_path
         encoding="utf-8",
     )
     ep_list: list[EpisodeItem] = [{"episode_no": 50, "epi_num": 1, "epi_title": "Fifty"}]
-    fetched_results: list[ChapterResult] = [
-        {"error": "403 Client Error", "epi_no": 50, "epi_title": "Fifty"}
-    ]
+    fetched_results: list[ChapterResult] = [{"error": "403 Client Error", "epi_no": 50, "epi_title": "Fifty"}]
 
     merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
 
@@ -1023,9 +1031,7 @@ def test_merge_cache_with_fetched_prefers_fresh_result_over_cache(tmp_path):
         encoding="utf-8",
     )
     ep_list: list[EpisodeItem] = [{"episode_no": 70, "epi_num": 1, "epi_title": "Seventy"}]
-    fetched_results: list[ChapterResult] = [
-        {"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}
-    ]
+    fetched_results: list[ChapterResult] = [{"epi_no": 70, "epi_title": "Seventy", "html": "<p>fresh</p>"}]
 
     merged = merge_cache_with_fetched(ep_list, fetched_results, str(book_dir))
 

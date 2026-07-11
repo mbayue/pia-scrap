@@ -1,9 +1,14 @@
 import os
 import threading
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse, HTMLResponse
+    from pydantic import BaseModel
+except ImportError as e:
+    raise SystemExit(
+        "Web dependencies not installed. Run: pip install -e '.[web]'"
+    ) from e
 
 from src import web_jobs
 from src.runner import QueueOptions
@@ -24,10 +29,12 @@ from src.web_jobs import (
 
 app = FastAPI(title="PIA Scrap")
 MAX_STORED_JOBS = web_jobs.MAX_STORED_JOBS
+MAX_CONCURRENT_JOBS = 4
 JobState = web_jobs.JobState
 jobs = web_jobs.jobs
 jobs_lock = web_jobs.jobs_lock
 _prune_finished_jobs_locked = web_jobs.prune_finished_jobs_locked
+_job_semaphore = threading.Semaphore(MAX_CONCURRENT_JOBS)
 
 
 class JobRequest(BaseModel):
@@ -57,6 +64,8 @@ def index() -> str:
 
 @app.post("/api/jobs")
 def create_job(request: JobRequest) -> dict[str, str]:
+    if not _job_semaphore.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Too many concurrent jobs. Try again later.")
     options = QueueOptions(
         out=request.out,
         start_chapter=request.start_chapter,
@@ -76,9 +85,28 @@ def create_job(request: JobRequest) -> dict[str, str]:
         cookie_text=request.cookie_text,
     )
     try:
-        return {"job_id": create_web_job(request.novel_text, options, threading.Thread)}
+        return {"job_id": create_web_job(
+            request.novel_text, options, threading.Thread,
+            on_complete=_job_semaphore.release,
+        )}
     except JobInputError as exc:
+        _job_semaphore.release()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/jobs")
+def list_jobs() -> list[dict[str, object]]:
+    """Return a summary of all jobs (id, status, created_at, novel_ids)."""
+    with jobs_lock:
+        return [
+            {
+                "id": job["id"],
+                "status": job["status"],
+                "created_at": job["created_at"],
+                "novel_ids": job.get("novel_ids", []),
+            }
+            for job in sorted(jobs.values(), key=lambda j: j.get("created_at", ""), reverse=True)
+        ]
 
 
 @app.get("/api/jobs/{job_id}")

@@ -20,9 +20,7 @@ ACTIVE_JOB_STATUSES: Final = {"queued", "running"}
 # into its own logs without monkey-patching module-level `tqdm` (which is
 # process-global and corrupts concurrent jobs). The CLI never sets a sink, so
 # calls fall through to the real tqdm.
-_active_progress: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "active_progress", default=None
-)
+_active_progress: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_progress", default=None)
 
 
 class JobState(TypedDict):
@@ -134,23 +132,27 @@ def prune_finished_jobs_locked() -> None:
         jobs.pop(job_id, None)
 
 
-# Install per-thread tqdm dispatchers once at import. These route progress to the
-# active job's sink (set per-thread inside run_job) and fall through to the real
-# tqdm otherwise. Replacing module-level `tqdm` here is safe: it happens a single
-# time at import, never from a request path, so concurrent jobs don't clobber it.
+# Install per-thread tqdm dispatchers once at import. These replace the module-level
+# tqdm in epub and chapter_cache with wrappers that check a contextvars.ContextVar
+# for an active job id. When a job is running on the current thread, progress routes
+# to that job's log sink; otherwise it falls through to real tqdm. Replacing at import
+# time (not per-request) is safe because it happens exactly once and concurrent jobs
+# each bind their own ContextVar token inside run_job.
 epub_module.tqdm = _make_thread_local_tqdm(epub_module.tqdm)
 chapter_cache_module.tqdm = _make_thread_local_tqdm(chapter_cache_module.tqdm)
 
 
-def run_job(job_id: str, novel_ids: list[int], options: QueueOptions) -> None:
+def run_job(
+    job_id: str,
+    novel_ids: list[int],
+    options: QueueOptions,
+    on_complete: Callable[[], None] | None = None,
+) -> None:
     with jobs_lock:
         jobs[job_id]["status"] = "running"
         jobs[job_id]["started_at"] = datetime.now().isoformat(timespec="seconds")
 
     try:
-        # Bind this job's id to the current thread. Because the tqdm wrappers
-        # above read _active_progress per-call, concurrent jobs running on other
-        # threads keep their own sinks (no shared module-state mutation).
         sink_token = _active_progress.set(job_id)
         try:
             result = run_queue(novel_ids, options, log=lambda msg: append_log(job_id, msg))
@@ -168,9 +170,17 @@ def run_job(job_id: str, novel_ids: list[int], options: QueueOptions) -> None:
             jobs[job_id]["error"] = str(exc)
             jobs[job_id]["logs"].append(f"[error] {exc}")
             jobs[job_id]["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    finally:
+        if on_complete:
+            on_complete()
 
 
-def create_job(novel_text: str, options: QueueOptions, thread_factory: type[threading.Thread]) -> str:
+def create_job(
+    novel_text: str,
+    options: QueueOptions,
+    thread_factory: type[threading.Thread],
+    on_complete: Callable[[], None] | None = None,
+) -> str:
     try:
         novel_ids = parse_queue_lines(novel_text.splitlines(), source="web")
     except ValueError as exc:
@@ -199,7 +209,9 @@ def create_job(novel_text: str, options: QueueOptions, thread_factory: type[thre
         }
         prune_finished_jobs_locked()
 
-    thread = thread_factory(target=run_job, args=(job_id, novel_ids, options), daemon=True)
+    thread = thread_factory(
+        target=run_job, args=(job_id, novel_ids, options), kwargs={"on_complete": on_complete}, daemon=True
+    )
     thread.start()
     return job_id
 

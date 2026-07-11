@@ -55,6 +55,7 @@ class FakeCookie:
         self.name = name
         self.value = value
 
+
 class RecordingSession(FakeSession):
     def __init__(self, responses):
         super().__init__(responses)
@@ -64,12 +65,15 @@ class RecordingSession(FakeSession):
         self.requests.append({"method": method, "url": url, "headers": headers, "params": params, "json": json})
         return super().request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
 
+
 def test_request_with_retries_retries_http_500_then_returns_success(monkeypatch, capsys):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
-        FakeResponse(200, {"errmsg": "", "result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
+            FakeResponse(200, {"errmsg": "", "result": "ok"}),
+        ]
+    )
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
@@ -80,10 +84,12 @@ def test_request_with_retries_retries_http_500_then_returns_success(monkeypatch,
 
 def test_request_with_retries_retries_502(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(502, {"errmsg": "bad gateway"}, reason="Bad Gateway"),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(502, {"errmsg": "bad gateway"}, reason="Bad Gateway"),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
@@ -93,11 +99,13 @@ def test_request_with_retries_retries_502(monkeypatch):
 
 def test_request_with_retries_raises_concise_api_message_after_final_500(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
-        FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
-        FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
+            FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
+            FakeResponse(500, {"errmsg": "Too many requests. Please try again later."}),
+        ]
+    )
 
     try:
         request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
@@ -111,21 +119,26 @@ def test_request_with_retries_raises_concise_api_message_after_final_500(monkeyp
 
 def test_request_with_retries_does_not_retry_401_before_auth_recovery(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(401, {"errmsg": "token expire"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(401, {"errmsg": "token expire"}),
+        ]
+    )
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
     assert session.calls == 1
     assert response.status_code == 401
 
+
 def test_request_with_retries_refreshes_then_retries_expired_token(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(401, {"errmsg": "token expire"}),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(401, {"errmsg": "token expire"}),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
     refreshed = []
 
     def refresh() -> str:
@@ -151,10 +164,12 @@ def test_request_with_retries_refreshes_on_500_token_expired(monkeypatch):
     # The old code only recovered on 401/403 or non-5xx bodies, so a token-expiry
     # 500 retried forever without refreshing. This pins the corrected behaviour.
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(500, {"errmsg": "The token has expired"}),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(500, {"errmsg": "The token has expired"}),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
     refreshed = []
 
     def refresh() -> str:
@@ -182,11 +197,13 @@ def test_request_with_retries_retries_recovered_response_that_is_still_500(monke
     # and retry/backoff -- it should be handled exactly like a normal 500 instead
     # of being returned to the caller immediately.
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(500, {"errmsg": "The token has expired"}),
-        FakeResponse(500, {"errmsg": "Unrelated server hiccup"}),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(500, {"errmsg": "The token has expired"}),
+            FakeResponse(500, {"errmsg": "Unrelated server hiccup"}),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
     refreshed = []
 
     def refresh() -> str:
@@ -209,10 +226,12 @@ def test_request_with_retries_retries_recovered_response_that_is_still_500(monke
 
 def test_request_with_retries_rebuilds_auth_headers_after_refresh(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = RecordingSession([
-        FakeResponse(401, {"errmsg": "token expire"}),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = RecordingSession(
+        [
+            FakeResponse(401, {"errmsg": "token expire"}),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
     session.cookies = [
         FakeCookie("USERKEY", "old-user"),
         FakeCookie("TKEY", "old-token"),
@@ -241,12 +260,15 @@ def test_request_with_retries_rebuilds_auth_headers_after_refresh(monkeypatch):
     assert session.requests[1]["headers"]["login-at"] == "fresh-login"
     assert session.requests[1]["headers"]["Cookie"] == "USERKEY=new-user; TKEY=new-token; last_login=basic"
 
+
 def test_request_with_retries_logs_in_when_refresh_fails(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
-    session = FakeSession([
-        FakeResponse(200, {"errmsg": "token expire"}),
-        FakeResponse(200, {"result": "ok"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(200, {"errmsg": "token expire"}),
+            FakeResponse(200, {"result": "ok"}),
+        ]
+    )
     logins = []
 
     def fail_refresh():
@@ -276,6 +298,7 @@ def test_novelpia_client_close_closes_session(monkeypatch):
 
     assert closed == [True]
 
+
 def test_fetch_episodes_parallel_propagates_keyboard_interrupt():
     class InterruptingClient(NovelpiaClient):
         def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
@@ -289,6 +312,7 @@ def test_fetch_episodes_parallel_propagates_keyboard_interrupt():
         pass
     else:
         raise AssertionError("expected KeyboardInterrupt")
+
 
 def test_login_ignores_placeholder_userkey_cookie():
     password = "test-" + "password"
@@ -306,6 +330,7 @@ def test_login_ignores_placeholder_userkey_cookie():
     assert client.tokens.userkey == "generated-user"
     assert client.tokens.tkey == "login-t"
 
+
 def test_refresh_merges_login_at_into_existing_config(monkeypatch, tmp_path):
     config_path = tmp_path / ".api.json"
     config_path.write_text('{"userkey": "stored-user", "tkey": "stored-t"}', encoding="utf-8")
@@ -320,15 +345,19 @@ def test_refresh_merges_login_at_into_existing_config(monkeypatch, tmp_path):
         "tkey": "stored-t",
     }
 
+
 def test_novel_returns_validated_consumed_shape():
     client = NovelpiaClient(throttle=0)
-    client.__dict__["s"] = FakeSession([
-        FakeResponse(200, {"result": {"novel": {"novel_name": "Book", "count_epi": 1}}}),
-    ])
+    client.__dict__["s"] = FakeSession(
+        [
+            FakeResponse(200, {"result": {"novel": {"novel_name": "Book", "count_epi": 1}}}),
+        ]
+    )
 
     result = client.novel(123)
 
     assert result["result"]["novel"].get("novel_name") == "Book"
+
 
 def test_episode_list_reports_missing_consumed_key():
     client = NovelpiaClient(throttle=0)
@@ -342,6 +371,7 @@ def test_episode_list_reports_missing_consumed_key():
     else:
         raise AssertionError("expected ApiShapeError")
 
+
 def test_episode_content_reports_bad_consumed_shape():
     client = NovelpiaClient(throttle=0)
     client.__dict__["s"] = FakeSession([FakeResponse(200, {"result": {"data": []}})])
@@ -353,6 +383,7 @@ def test_episode_content_reports_bad_consumed_shape():
         assert str(exc) == "episode content response expected object at $.result.data"
     else:
         raise AssertionError("expected ApiShapeError")
+
 
 def test_episode_content_makes_single_plain_request(monkeypatch):
     # episode_content deliberately does not retry or attempt login_at auth
@@ -403,6 +434,7 @@ def test_detect_ad_reward_required_from_failure_shape():
 
     assert reward == AdRewardRequired(novel_no=23, episode_no=2407)
 
+
 def test_detect_premium_episode_blocked_from_failure_shape():
     body = {
         "statusCode": 500,
@@ -425,6 +457,7 @@ def test_detect_premium_episode_blocked_from_failure_shape():
 
     assert blocked == PremiumEpisodeBlocked(novel_no=23, episode_no=2408)
 
+
 def test_detect_known_blocks_ignore_malformed_or_unrelated_body():
     malformed_premium = {"code": "0009", "errmsg": "novel.PREMIUM_EPISODE", "result": {"data": {}}}
     malformed_ad = {"code": "0008", "errmsg": "novel.ADVERTISEMENT_EPISODE", "result": {"data": {}}}
@@ -435,10 +468,12 @@ def test_detect_known_blocks_ignore_malformed_or_unrelated_body():
     assert detect_ad_reward_required(malformed_ad) is None
     assert detect_ad_reward_required(unrelated) is None
 
+
 def test_known_api_block_error_formats_block_marker():
     error = KnownApiBlockError(PremiumEpisodeBlocked(novel_no=23, episode_no=2408))
 
     assert str(error) == "premium episode blocked: novel_no=23 episode_no=2408"
+
 
 def test_parse_block_label_round_trips_all_block_kinds():
     for kind in BlockKind:
@@ -446,16 +481,22 @@ def test_parse_block_label_round_trips_all_block_kinds():
 
         assert parse_block_label(label) == (kind, 23, 2408)
 
+
 def test_episode_ticket_classifies_ad_block_without_retrying(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
     client = NovelpiaClient(throttle=0)
-    session = FakeSession([
-        FakeResponse(500, {
-            "errmsg": "novel.ADVERTISEMENT_EPISODE",
-            "code": "0008",
-            "result": {"data": {"novel_no": 23, "data": {"episode_no": 2407}}},
-        }),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(
+                500,
+                {
+                    "errmsg": "novel.ADVERTISEMENT_EPISODE",
+                    "code": "0008",
+                    "result": {"data": {"novel_no": 23, "data": {"episode_no": 2407}}},
+                },
+            ),
+        ]
+    )
     client.__dict__["s"] = session
 
     try:
@@ -467,16 +508,22 @@ def test_episode_ticket_classifies_ad_block_without_retrying(monkeypatch):
 
     assert session.calls == 1
 
+
 def test_episode_ticket_classifies_premium_block_without_retrying(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
     client = NovelpiaClient(throttle=0)
-    session = FakeSession([
-        FakeResponse(500, {
-            "errmsg": "novel.PREMIUM_EPISODE",
-            "code": "0009",
-            "result": {"data": {"novel_no": 23, "data": {"episode_no": 2408}}},
-        }),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(
+                500,
+                {
+                    "errmsg": "novel.PREMIUM_EPISODE",
+                    "code": "0009",
+                    "result": {"data": {"novel_no": 23, "data": {"episode_no": 2408}}},
+                },
+            ),
+        ]
+    )
     client.__dict__["s"] = session
 
     try:
@@ -488,14 +535,17 @@ def test_episode_ticket_classifies_premium_block_without_retrying(monkeypatch):
 
     assert session.calls == 1
 
+
 def test_episode_ticket_unknown_500_still_retries(monkeypatch):
     monkeypatch.setattr("src.api.time.sleep", lambda _: None)
     client = NovelpiaClient(throttle=0)
-    session = FakeSession([
-        FakeResponse(500, {"errmsg": "temporary"}),
-        FakeResponse(500, {"errmsg": "temporary"}),
-        FakeResponse(500, {"errmsg": "temporary"}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(500, {"errmsg": "temporary"}),
+            FakeResponse(500, {"errmsg": "temporary"}),
+            FakeResponse(500, {"errmsg": "temporary"}),
+        ]
+    )
     client.__dict__["s"] = session
 
     try:
@@ -507,15 +557,18 @@ def test_episode_ticket_unknown_500_still_retries(monkeypatch):
 
     assert session.calls == 3
 
+
 def test_probe_ad_reward_unlock_waits_grants_then_retries_ticket(monkeypatch):
     sleeps = []
     client = NovelpiaClient(throttle=1.25)
     client.tokens.login_at = "login-token"
-    session = RecordingSession([
-        FakeResponse(200, {"result": {"token": "reward-token"}}),
-        FakeResponse(201, {"result": {"granted": True}}),
-        FakeResponse(200, {"result": {"_t": "episode-token"}}),
-    ])
+    session = RecordingSession(
+        [
+            FakeResponse(200, {"result": {"token": "reward-token"}}),
+            FakeResponse(201, {"result": {"granted": True}}),
+            FakeResponse(200, {"result": {"_t": "episode-token"}}),
+        ]
+    )
     client.__dict__["s"] = session
     monkeypatch.setattr("src.api.secrets.SystemRandom.uniform", lambda _self, low, high: 0.3)
     monkeypatch.setattr("src.api.time.sleep", lambda seconds: sleeps.append(seconds))
@@ -537,16 +590,19 @@ def test_probe_ad_reward_unlock_waits_grants_then_retries_ticket(monkeypatch):
     assert session.requests[2]["url"].endswith("/v1/novel/episode")
     assert session.requests[2]["params"] == {"episode_no": 2407}
 
+
 def test_fetch_episode_retries_with_fresh_ticket_on_transient_403(monkeypatch):
     # A 403 on content means the _t ticket is stale, not that login_at expired,
     # so the retry must mint a brand new ticket rather than resend the same _t.
     sleeps = []
-    session = FakeSession([
-        FakeResponse(200, {"result": {"_t": "ticket-token-1"}}),
-        FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
-        FakeResponse(200, {"result": {"_t": "ticket-token-2"}}),
-        FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(200, {"result": {"_t": "ticket-token-1"}}),
+            FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
+            FakeResponse(200, {"result": {"_t": "ticket-token-2"}}),
+            FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
+        ]
+    )
     client = NovelpiaClient(throttle=0)
     client.__dict__["s"] = session
     monkeypatch.setattr("src.api.time.sleep", lambda seconds: sleeps.append(seconds))
@@ -563,12 +619,14 @@ def test_fetch_episode_403_retry_warning_identifies_the_chapter(monkeypatch, cap
     # The 403 retry warning must name which chapter is affected, not just show a
     # bare "retrying" message -- otherwise a long multi-chapter run gives no way
     # to tell which chapters hit trouble without -v.
-    session = FakeSession([
-        FakeResponse(200, {"result": {"_t": "ticket-token-1"}}),
-        FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
-        FakeResponse(200, {"result": {"_t": "ticket-token-2"}}),
-        FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(200, {"result": {"_t": "ticket-token-1"}}),
+            FakeResponse(403, {}, url="https://api-global.novelpia.com/content?_t=secret-token"),
+            FakeResponse(200, {"result": {"_t": "ticket-token-2"}}),
+            FakeResponse(200, {"result": {"data": {"epi_content": "<p>ok</p>"}}}),
+        ]
+    )
     client = NovelpiaClient(throttle=0)
     client.__dict__["s"] = session
     monkeypatch.setattr("src.api.time.sleep", lambda _seconds: None)
@@ -578,18 +636,27 @@ def test_fetch_episode_403_retry_warning_identifies_the_chapter(monkeypatch, cap
     out = capsys.readouterr().out
     assert "chapter 'The Big Reveal' (episode_no=99)" in out
 
+
 def test_fetch_episode_redacts_content_token_after_persistent_403(monkeypatch):
     # Every attempt mints its own fresh ticket (secret-token-1/2/3), and all
     # three content fetches 403 -- fetch_episode gives up after
     # CONTENT_FETCH_ATTEMPTS and surfaces the last error with the token redacted.
-    session = FakeSession([
-        FakeResponse(200, {"result": {"_t": "secret-token-1"}}),
-        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-1"),
-        FakeResponse(200, {"result": {"_t": "secret-token-2"}}),
-        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-2"),
-        FakeResponse(200, {"result": {"_t": "secret-token-3"}}),
-        FakeResponse(403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-3"),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(200, {"result": {"_t": "secret-token-1"}}),
+            FakeResponse(
+                403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-1"
+            ),
+            FakeResponse(200, {"result": {"_t": "secret-token-2"}}),
+            FakeResponse(
+                403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-2"
+            ),
+            FakeResponse(200, {"result": {"_t": "secret-token-3"}}),
+            FakeResponse(
+                403, {}, reason="Forbidden for url: https://api-global.novelpia.com/content?_t=secret-token-3"
+            ),
+        ]
+    )
     client = NovelpiaClient(throttle=0)
     client.__dict__["s"] = session
     monkeypatch.setattr("src.api.time.sleep", lambda _seconds: None)
@@ -600,9 +667,11 @@ def test_fetch_episode_redacts_content_token_after_persistent_403(monkeypatch):
     assert "_t=<redacted>" in str(result.get("error"))
     assert session.calls == 6
 
+
 def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):
     client = NovelpiaClient(throttle=0)
     monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {"_t": "token"}})
+
     def bad_content(_token):
         raise ApiShapeError("episode content response", "$.result.data", "object")
 

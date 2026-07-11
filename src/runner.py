@@ -10,7 +10,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src import const
 from src.api import NovelpiaClient
 from src.builder import build_epub, build_txt
 from src.contracts import QueueResult, QueueSummaryRow
@@ -37,23 +36,44 @@ def _load_runtime_dotenv() -> None:
 
 
 @dataclass
-class QueueOptions:
+class OutputOptions:
+    """Output configuration: where and how to write results."""
+
     out: str = "output"
+    lang: str = "en"
+    txt: bool = False
+
+
+@dataclass
+class FetchOptions:
+    """Download behavior: chapter range, concurrency, throttling."""
+
     start_chapter: int | None = None
     end_chapter: int | None = None
     max_chapters: int = 0
-    lang: str = "en"
-    proxy: str | None = None
-    debug: bool = False
     throttle: float = 1.25
     workers: int = 1
+    proxy: str | None = None
+    debug: bool = False
     update: bool = False
     retry_failed: bool = False
-    txt: bool = False
+
+
+@dataclass
+class AuthOptions:
+    """Authentication: credentials or cookies."""
+
     email: str | None = None
     password: str | None = None
     cookie_file: str | None = None
     cookie_text: str | None = None
+
+
+@dataclass
+class QueueOptions(OutputOptions, FetchOptions, AuthOptions):
+    """Composed options for backward compatibility. Combines output, fetch, and auth."""
+
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +81,7 @@ class QueueRequest:
     novel_ids: list[int]
     options: QueueOptions
     show_summary: bool
+
 
 class CliUsageError(ValueError):
     pass
@@ -85,6 +106,7 @@ def validate_queue_options(options: QueueOptions) -> None:
         and options.start_chapter > options.end_chapter
     ):
         raise CliUsageError("-start must be less than or equal to -end")
+
 
 def _parse_novel_token(item: str) -> int:
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
@@ -151,6 +173,7 @@ def build_queue_request(args: argparse.Namespace) -> QueueRequest:
         show_summary=len(novel_ids) > 1 or bool(args.queue),
     )
 
+
 def dedupe_novel_ids(novel_ids: Iterable[int]) -> tuple[list[int], list[int]]:
     unique_ids: list[int] = []
     skipped_ids: list[int] = []
@@ -176,9 +199,99 @@ def _cookie_text_from_env() -> str | None:
             raise RuntimeError(f"Invalid NOVELPIA_COOKIE_TEXT_B64: {e}") from e
     return None
 
+
+def _auth_from_cookies(
+    cookie_text: str | None,
+    cookie_file: str | None,
+    cfg_login_at: str | None,
+    options: FetchOptions,
+) -> NovelpiaClient:
+    """Create client from Netscape cookie text or file."""
+    client = NovelpiaClient(
+        email=None,
+        password=None,
+        proxy=options.proxy,
+        throttle=options.throttle,
+        debug=options.debug,
+    )
+    if cookie_text:
+        jar = load_netscape_cookies_text(cookie_text)
+    elif cookie_file:
+        jar = load_netscape_cookies(os.path.expanduser(cookie_file))
+    else:
+        raise RuntimeError("cookie_text or cookie_file required")
+    auth = cookie_auth_from_jar(jar, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
+    client.tokens.userkey = auth.userkey
+    client.tokens.tkey = auth.tkey
+    client.tokens.login_at = auth.login_at
+    if not auth.userkey or is_placeholder_userkey(auth.userkey):
+        raise RuntimeError(
+            "Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again."
+        )
+    client.s.cookies.update(jar)
+    save_config(
+        {
+            "login_at": auth.login_at or "",
+            "userkey": auth.userkey,
+            "tkey": auth.tkey or "",
+        }
+    )
+    return client
+
+
+def _auth_from_credentials(
+    email: str,
+    password: str,
+    cfg_userkey: str | None,
+    cfg_tkey: str | None,
+    options: FetchOptions,
+) -> NovelpiaClient:
+    """Create client from email/password login."""
+    client = NovelpiaClient(
+        email=email,
+        password=password,
+        proxy=options.proxy,
+        throttle=options.throttle,
+        userkey=cfg_userkey,
+        tkey=cfg_tkey,
+        debug=options.debug,
+    )
+    client.login()
+    auth = cookie_auth_from_jar(client.s.cookies)
+    login_userkey = None if is_placeholder_userkey(auth.userkey) else auth.userkey
+    save_config(
+        {
+            "login_at": client.tokens.login_at,
+            "userkey": login_userkey or client.tokens.userkey or cfg_userkey,
+            "tkey": auth.tkey or client.tokens.tkey or cfg_tkey,
+        }
+    )
+    return client
+
+
+def _auth_from_stored_tokens(
+    cfg_login_at: str,
+    cfg_userkey: str,
+    cfg_tkey: str | None,
+    options: FetchOptions,
+) -> NovelpiaClient:
+    """Create client from stored tokens in .api.json."""
+    client = NovelpiaClient(
+        email=None,
+        password=None,
+        proxy=options.proxy,
+        throttle=options.throttle,
+        userkey=cfg_userkey,
+        tkey=cfg_tkey,
+        debug=options.debug,
+    )
+    client.tokens.login_at = cfg_login_at
+    return client
+
+
 def create_client(options: QueueOptions) -> NovelpiaClient:
+    """Create an authenticated NovelpiaClient from options (cookie, credentials, or stored tokens)."""
     _load_runtime_dotenv()
-    const.HTTP_LOG = bool(options.debug)
 
     cfg = load_config()
     cfg_login_at = cfg.get("login_at") or None
@@ -193,70 +306,17 @@ def create_client(options: QueueOptions) -> NovelpiaClient:
     cookie_text = options.cookie_text or _cookie_text_from_env()
 
     if cookie_text or cookie_file:
-        client = NovelpiaClient(
-            email=None,
-            password=None,
-            proxy=options.proxy,
-            throttle=options.throttle,
-        )
-        if cookie_text:
-            jar = load_netscape_cookies_text(cookie_text)
-        elif cookie_file:
-            cookie_path = os.path.expanduser(cookie_file)
-            jar = load_netscape_cookies(cookie_path)
-        else:
-            raise RuntimeError("cookie_text or cookie_file required")
-        auth = cookie_auth_from_jar(jar, os.getenv("NOVELPIA_LOGIN_AT") or cfg_login_at)
-        client.tokens.userkey = auth.userkey
-        client.tokens.tkey = auth.tkey
-        client.tokens.login_at = auth.login_at
-        if not auth.userkey or is_placeholder_userkey(auth.userkey):
-            raise RuntimeError(
-                "Netscape cookie file did not contain USERKEY. Export cookies for novelpia.com and try again."
-            )
-        client.s.cookies.update(jar)
-        save_config({
-            "login_at": auth.login_at or "",
-            "userkey": auth.userkey,
-            "tkey": auth.tkey or "",
-        })
-        return client
-
+        return _auth_from_cookies(cookie_text, cookie_file, cfg_login_at, options)
     if email and password:
-        client = NovelpiaClient(
-            email=email,
-            password=password,
-            proxy=options.proxy,
-            throttle=options.throttle,
-            userkey=cfg_userkey,
-            tkey=cfg_tkey,
-        )
-        client.login()
-        auth = cookie_auth_from_jar(client.s.cookies)
-        login_userkey = None if is_placeholder_userkey(auth.userkey) else auth.userkey
-        save_config({
-            "login_at": client.tokens.login_at,
-            "userkey": login_userkey or client.tokens.userkey or cfg_userkey,
-            "tkey": auth.tkey or client.tokens.tkey or cfg_tkey,
-        })
-        return client
-
+        return _auth_from_credentials(email, password, cfg_userkey, cfg_tkey, options)
     if cfg_login_at and cfg_userkey:
-        client = NovelpiaClient(
-            email=None,
-            password=None,
-            proxy=options.proxy,
-            throttle=options.throttle,
-            userkey=cfg_userkey,
-            tkey=cfg_tkey,
-        )
-        client.tokens.login_at = cfg_login_at
-        return client
+        return _auth_from_stored_tokens(cfg_login_at, cfg_userkey, cfg_tkey, options)
 
     raise RuntimeError("No credentials or stored tokens found. Provide email/password to login once.")
 
 
 def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = print) -> QueueResult:
+    """Download and build all novels in the queue. Returns a QueueResult with summary rows and failures."""
     novel_ids, skipped_ids = dedupe_novel_ids(novel_ids)
     if not novel_ids:
         raise ValueError("provide at least one novel_id")
@@ -275,85 +335,55 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
                 log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
 
             try:
-                if options.txt:
-                    out_dir_final, title, count = build_txt(
-                        client,
-                        novel_id,
-                        options.out,
-                        start_chapter=options.start_chapter,
-                        end_chapter=options.end_chapter,
-                        max_chapters=max_chapters,
-                        language=options.lang,
-                        debug_dump=options.debug,
-                        update=options.update,
-                        retry_failed=options.retry_failed,
-                        max_workers=options.workers,
-                    )
-                    if out_dir_final is None:
-                        if options.retry_failed:
-                            log(f"[info] No failed chapters to retry for '{title}'. Nothing to do.")
-                        else:
-                            log(f"[info] No updates found for '{title}'. Existing TXT output left unchanged.")
-                        summary_rows.append({
+                builder_fn = build_txt if options.txt else build_epub
+                fmt_label = "TXT" if options.txt else "EPUB"
+                out_result, title, count = builder_fn(
+                    client,
+                    novel_id,
+                    options.out,
+                    start_chapter=options.start_chapter,
+                    end_chapter=options.end_chapter,
+                    max_chapters=max_chapters,
+                    language=options.lang,
+                    debug_dump=options.debug,
+                    update=options.update,
+                    retry_failed=options.retry_failed,
+                    max_workers=options.workers,
+                )
+                if out_result is None:
+                    reason = "No failed chapters to retry" if options.retry_failed else "No updates found"
+                    log(f"[info] {reason} for '{title}'. Existing {fmt_label} left unchanged.")
+                    summary_rows.append(
+                        {
                             "novel_id": novel_id,
                             "status": "no updates",
                             "chapters": 0,
                             "title": title,
                             "path": None,
-                        })
-                    else:
-                        log(f"[success] Wrote TXT files under: {out_dir_final}")
-                        summary_rows.append({
-                            "novel_id": novel_id,
-                            "status": "txt",
-                            "chapters": count,
-                            "title": title,
-                            "path": out_dir_final,
-                        })
+                        }
+                    )
                 else:
-                    out_file, title, count = build_epub(
-                        client,
-                        novel_id,
-                        options.out,
-                        start_chapter=options.start_chapter,
-                        end_chapter=options.end_chapter,
-                        max_chapters=max_chapters,
-                        language=options.lang,
-                        debug_dump=options.debug,
-                        update=options.update,
-                        retry_failed=options.retry_failed,
-                        max_workers=options.workers,
-                    )
-                    if out_file is None:
-                        if options.retry_failed:
-                            log(f"[info] No failed chapters to retry for '{title}'. Nothing to do.")
-                        else:
-                            log(f"[info] No updates found for '{title}'. Existing EPUB left unchanged.")
-                        summary_rows.append({
+                    log(f"[success] Wrote {fmt_label}: {out_result}")
+                    summary_rows.append(
+                        {
                             "novel_id": novel_id,
-                            "status": "no updates",
-                            "chapters": 0,
-                            "title": title,
-                            "path": None,
-                        })
-                    else:
-                        log(f"[success] Wrote EPUB: {out_file}")
-                        summary_rows.append({
-                            "novel_id": novel_id,
-                            "status": "epub",
+                            "status": fmt_label.lower(),
                             "chapters": count,
                             "title": title,
-                            "path": out_file,
-                        })
+                            "path": out_result,
+                        }
+                    )
             except Exception as e:
                 failures.append((novel_id, str(e)))
-                summary_rows.append({
-                    "novel_id": novel_id,
-                    "status": "failed",
-                    "chapters": None,
-                    "title": str(e),
-                    "path": None,
-                })
+                summary_rows.append(
+                    {
+                        "novel_id": novel_id,
+                        "status": "failed",
+                        "chapters": None,
+                        "title": str(e),
+                        "path": None,
+                    }
+                )
                 log(f"[error] Failed to build novel {novel_id}: {e}")
     finally:
         client.close()
