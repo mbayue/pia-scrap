@@ -20,9 +20,7 @@ def pause_after_usage_error() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Novelpia to EPUB packer (API)")
-    ap.add_argument(
-        "novel_ids", metavar="novel_id", type=int, nargs="*", help="novel_no(s), e.g., 5522 or 5522 5760"
-    )
+    ap.add_argument("novel_ids", metavar="novel_id", type=int, nargs="*", help="novel_no(s), e.g., 5522 or 5522 5760")
     ap.add_argument(
         "-q",
         dest="queue",

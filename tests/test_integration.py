@@ -147,14 +147,21 @@ def test_build_epub_update_mode(tmp_path):
     try:
         # First build
         out_file1, _title1, count1 = build_epub(
-            client, 49, str(tmp_path), max_chapters=3,
+            client,
+            49,
+            str(tmp_path),
+            max_chapters=3,
         )
         assert out_file1 is not None
         assert count1 > 0
 
         # Second build with update=True — should reuse cache
         out_file2, _title2, _count2 = build_epub(
-            client, 49, str(tmp_path), max_chapters=3, update=True,
+            client,
+            49,
+            str(tmp_path),
+            max_chapters=3,
+            update=True,
         )
         # May return None if no new chapters (expected in update mode)
         if out_file2 is not None:
@@ -181,7 +188,11 @@ def test_build_epub_retry_failed_mode(tmp_path):
 
         # Retry with retry_failed=True — should be a no-op if no failures
         out_file, _title2, _count2 = build_epub(
-            client, 49, str(tmp_path), max_chapters=3, retry_failed=True,
+            client,
+            49,
+            str(tmp_path),
+            max_chapters=3,
+            retry_failed=True,
         )
         # Expected: None (no failed chapters to retry)
         assert out_file is None
