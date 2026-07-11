@@ -590,7 +590,7 @@ function updateProgress(job) {
     const logs = job.logs || [];
     let total = 0, done = 0;
     for (let i = logs.length - 1; i >= 0; i--) {
-      const m = logs[i].match(/\[(\d+)\/(\d+)\s*chap\]/);
+      const m = logs[i].match(/(\d+)\/(\d+)\s*chap/);
       if (m) { done = parseInt(m[1], 10); total = parseInt(m[2], 10); break; }
     }
     pct = total > 0 ? Math.round((done / total) * 100) : 0;
