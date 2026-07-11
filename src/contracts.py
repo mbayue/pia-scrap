@@ -77,7 +77,7 @@ class ChapterResult(TypedDict, total=False):
 
 def chapter_is_error(ch: ChapterResult) -> bool:
     """Check if a ChapterResult represents an error."""
-    return "error" in ch and bool(ch["error"])
+    return "error" in ch
 
 
 class FailedChapter(TypedDict, total=False):

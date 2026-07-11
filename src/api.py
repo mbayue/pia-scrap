@@ -392,11 +392,12 @@ class NovelpiaClient:
             debug=self.debug,
         )
         r.raise_for_status()
-        data = r.json()
-        result = data.get("result")
-        if not isinstance(result, dict) or "LOGINAT" not in result:
-            raise ApiShapeError("login", data)
-        self.tokens.login_at = result["LOGINAT"]
+        body = _response_json_object(r, "login response")
+        result = _required_object(body, "result", "$.result", "login response")
+        login_at = result.get("LOGINAT")
+        if not isinstance(login_at, str):
+            raise ApiShapeError("login response", "$.result.LOGINAT", "string")
+        self.tokens.login_at = login_at
         auth = cookie_auth_from_jar(self.s.cookies)
         if auth.tkey:
             self.tokens.tkey = auth.tkey
@@ -416,11 +417,12 @@ class NovelpiaClient:
             debug=self.debug,
         )
         r.raise_for_status()
-        resp = r.json()
-        result = resp.get("result")
-        if not isinstance(result, dict) or "LOGINAT" not in result:
-            raise ApiShapeError("refresh", resp)
-        self.tokens.login_at = result["LOGINAT"]
+        body = _response_json_object(r, "refresh response")
+        result = _required_object(body, "result", "$.result", "refresh response")
+        login_at = result.get("LOGINAT")
+        if not isinstance(login_at, str):
+            raise ApiShapeError("refresh response", "$.result.LOGINAT", "string")
+        self.tokens.login_at = login_at
         cfg = load_config()
         cfg["login_at"] = self.tokens.login_at or ""
         save_config(

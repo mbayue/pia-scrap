@@ -44,10 +44,10 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff check
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ web_app.py main.py
 
       - name: Run ruff format check
-        run: ruff format --check src/ tests/
+        run: ruff format --check src/ tests/ web_app.py main.py
 
   build:
     name: Build ${{ matrix.name }} zip

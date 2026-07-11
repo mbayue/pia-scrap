@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from src import web_jobs as web_jobs_module
 from src.web_jobs import UnsafeDownloadPathError, downloadable_path
 from web_app import (
+    MAX_CONCURRENT_JOBS,
     MAX_STORED_JOBS,
     JobRequest,
     JobState,
@@ -25,7 +26,7 @@ def _drain_semaphore():
     while _job_semaphore.acquire(blocking=False):
         pass
     # Re-release MAX_CONCURRENT_JOBS permits
-    for _ in range(4):
+    for _ in range(MAX_CONCURRENT_JOBS):
         _job_semaphore.release()
 
 

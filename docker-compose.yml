@@ -2,9 +2,11 @@ services:
   pia-scrap:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: .env
+        required: false
     volumes:
-      - ./.env:/app/.env:ro
       - ./output:/app/output
     environment:
       - OUTPUT_RETENTION_DAYS=30

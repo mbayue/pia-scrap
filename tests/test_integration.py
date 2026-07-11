@@ -20,8 +20,12 @@ requires_auth = pytest.mark.skipif(
 
 
 @requires_auth
-def test_create_client_authenticates():
+def test_create_client_authenticates(monkeypatch):
     """Verify that create_client successfully authenticates with stored credentials."""
+    # Ensure cookie env vars don't shadow the credential path
+    monkeypatch.delenv("NOVELPIA_COOKIE_TEXT", raising=False)
+    monkeypatch.delenv("NOVELPIA_COOKIE_TEXT_B64", raising=False)
+    monkeypatch.delenv("NOVELPIA_COOKIE_FILE", raising=False)
     options = QueueOptions(
         email=NOVELPIA_EMAIL,
         password=NOVELPIA_PASSWORD,
@@ -46,7 +50,7 @@ def test_fetch_novel_metadata(tmp_path):
     )
     client = create_client(options)
     try:
-        data, episodes, title, status = fetch_novel_and_episodes(client, 49)
+        _data, episodes, title, status = fetch_novel_and_episodes(client, 49)
         assert title
         assert len(episodes) > 0
         assert status in ("paid", "free", "unknown")
@@ -117,7 +121,7 @@ def test_fetch_single_episode(tmp_path):
     )
     client = create_client(options)
     try:
-        data, episodes, title, status = fetch_novel_and_episodes(client, 49)
+        _data, episodes, _title, _status = fetch_novel_and_episodes(client, 49)
         assert len(episodes) > 0
 
         ep = episodes[0]
@@ -142,14 +146,14 @@ def test_build_epub_update_mode(tmp_path):
     client = create_client(options)
     try:
         # First build
-        out_file1, title1, count1 = build_epub(
+        out_file1, _title1, count1 = build_epub(
             client, 49, str(tmp_path), max_chapters=3,
         )
         assert out_file1 is not None
         assert count1 > 0
 
         # Second build with update=True — should reuse cache
-        out_file2, title2, count2 = build_epub(
+        out_file2, _title2, _count2 = build_epub(
             client, 49, str(tmp_path), max_chapters=3, update=True,
         )
         # May return None if no new chapters (expected in update mode)
@@ -171,11 +175,12 @@ def test_build_epub_retry_failed_mode(tmp_path):
     )
     client = create_client(options)
     try:
-        # First build
-        build_epub(client, 49, str(tmp_path), max_chapters=3)
+        # First build — verify it captured all chapters so the retry is a true no-op
+        _out_file1, _title1, first_count = build_epub(client, 49, str(tmp_path), max_chapters=3)
+        assert first_count == 3
 
         # Retry with retry_failed=True — should be a no-op if no failures
-        out_file, title, count = build_epub(
+        out_file, _title2, _count2 = build_epub(
             client, 49, str(tmp_path), max_chapters=3, retry_failed=True,
         )
         # Expected: None (no failed chapters to retry)
@@ -185,8 +190,8 @@ def test_build_epub_retry_failed_mode(tmp_path):
 
 
 @requires_auth
-def test_run_queue_multi_novel(tmp_path):
-    """Run queue with multiple novels."""
+def test_run_queue_single_novel(tmp_path):
+    """Run queue with a single novel."""
     from src.runner import QueueOptions, run_queue
 
     options = QueueOptions(

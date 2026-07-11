@@ -270,8 +270,6 @@ def _try_ad_reward_fetch(
             logger.info(f"[info] stopped at premium chapter: episode_no={epi_no}")
             return None, True
         res: ChapterResult = {"error": str(e), "epi_no": epi_no, "epi_title": chapter_title(ep), "idx": pos}
-        results.append(res)
-        failed_rows.append(normalize_failed_chapter(ep, res, pos))
         return res, False
 
     res = client.fetch_episode(ep, pos, ticket_data=ticket_data)

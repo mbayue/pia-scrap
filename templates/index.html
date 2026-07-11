@@ -27,6 +27,9 @@
       --info-soft: #eff6ff;
       --warning: #d97706;
       --warning-soft: #fffbeb;
+      --info-fg: var(--info);
+      --success-fg: var(--success);
+      --destructive-fg: var(--destructive);
       --terminal: #09090b;
       --terminal-text: #e4e4e7;
       --radius: 14px;
@@ -55,6 +58,9 @@
         --success-soft: #14261c;
         --info-soft: #1b2a3d;
         --warning-soft: #2d2416;
+        --info-fg: #60a5fa;
+        --success-fg: #4ade80;
+        --destructive-fg: #f87171;
         --terminal: #000000;
         --terminal-text: #d4d4d8;
         --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
@@ -79,6 +85,9 @@
       --success-soft: #14261c;
       --info-soft: #1b2a3d;
       --warning-soft: #2d2416;
+      --info-fg: #60a5fa;
+      --success-fg: #4ade80;
+      --destructive-fg: #f87171;
       --terminal: #000000;
       --terminal-text: #d4d4d8;
       --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.4);
@@ -281,10 +290,10 @@
     .status-card { position: sticky; top: 18px; }
     .status-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
     .status.idle { background: var(--secondary); color: var(--muted-foreground); }
-    .status.queued { background: var(--info-soft); color: var(--info); border-color: var(--info); }
-    .status.running { background: var(--info-soft); color: var(--info); border-color: var(--info); }
-    .status.done { background: var(--success-soft); color: var(--success); border-color: var(--success); }
-    .status.failed { background: var(--destructive-soft); color: var(--destructive); border-color: var(--destructive); }
+    .status.queued { background: var(--info-soft); color: var(--info-fg); border-color: var(--info); }
+    .status.running { background: var(--info-soft); color: var(--info-fg); border-color: var(--info); }
+    .status.done { background: var(--success-soft); color: var(--success-fg); border-color: var(--success); }
+    .status.failed { background: var(--destructive-soft); color: var(--destructive-fg); border-color: var(--destructive); }
     .meta { display: grid; gap: 7px; margin: 12px 0; }
     .meta-row { display: flex; justify-content: space-between; gap: 16px; color: var(--muted); font-size: 13px; }
     .meta-row strong { color: var(--foreground); font-weight: 650; }
@@ -500,7 +509,7 @@
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;">
             <h3 style="margin:0;">Logs</h3>
-            <input id="log-filter" type="text" placeholder="Filter logs..." style="width:180px;min-height:30px;padding:4px 8px;font-size:12px;">
+            <input id="log-filter" type="text" placeholder="Filter logs..." aria-label="Filter logs" style="width:180px;min-height:30px;padding:4px 8px;font-size:12px;">
           </div>
           <pre id="logs" class="terminal empty">No logs yet.</pre>
           <div class="section-title">
@@ -571,9 +580,21 @@ themeToggle.addEventListener("click", () => {
 // Progress bar
 function updateProgress(job) {
   const rows = job.rows || [];
-  const total = rows.length || 1;
-  const done = rows.filter(r => r.status === "epub" || r.status === "txt" || r.status === "no updates").length;
-  const pct = job.status === "done" ? 100 : job.status === "failed" ? 100 : Math.round((done / total) * 100);
+  let pct;
+  if (job.status === "done" || job.status === "failed") {
+    pct = 100;
+  } else if (rows.length > 0) {
+    const done = rows.filter(r => r.status === "epub" || r.status === "txt" || r.status === "no updates").length;
+    pct = Math.round((done / rows.length) * 100);
+  } else {
+    const logs = job.logs || [];
+    let total = 0, done = 0;
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const m = logs[i].match(/\[(\d+)\/(\d+)\s*chap\]/);
+      if (m) { done = parseInt(m[1], 10); total = parseInt(m[2], 10); break; }
+    }
+    pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  }
   if (job.status === "queued" || job.status === "running") {
     progressWrap.style.display = "block";
     progressBar.style.width = pct + "%";
