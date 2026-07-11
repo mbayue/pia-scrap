@@ -16,7 +16,7 @@ from src.chapter_pipeline import (
     fetch_chapters,
     select_episodes,
 )
-from src.contracts import ChapterResult, EpisodeItem, EpisodeListResponse, NovelResponse
+from src.contracts import ChapterResult, EpisodeItem
 
 
 class DummyClient:
