@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pia-scrap"
-version = "2.5.0"
+version = "2.6.0"
 description = "Novelpia scraper & EPUB converter — API-based novel downloader"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,19 +27,21 @@ dependencies = [
     "requests==2.32.*",
     "tqdm==4.66.*",
     "python-dotenv==1.0.*",
-    "fastapi==0.115.*",
-    "uvicorn==0.34.*",
     "PySocks==1.7.*",
     "lxml==5.2.*",
     "typing_extensions==4.16.*",
 ]
 
 [project.optional-dependencies]
+web = [
+    "fastapi==0.115.*",
+    "uvicorn==0.34.*",
+]
 dev = [
-    "pytest>=8",
-    "pytest-cov>=5",
-    "ruff>=0.5",
-    "mypy>=1.10",
+    "pytest>=8,<9",
+    "pytest-cov>=5,<6",
+    "ruff>=0.5,<1",
+    "mypy>=1.10,<2",
     "types-beautifulsoup4",
 ]
 

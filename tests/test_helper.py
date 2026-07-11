@@ -4,7 +4,20 @@ from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 
 from src.const import config_path_for_runtime
-from src.helper import attach_auth_cookies, extract_t_token, j, load_config, mask_kv, save_config
+from src.helper import (
+    attach_auth_cookies,
+    extract_genre_names,
+    extract_t_token,
+    is_placeholder_userkey,
+    j,
+    kebab,
+    load_config,
+    mask_kv,
+    normalize_description,
+    normalize_url,
+    sanitize_filename,
+    save_config,
+)
 
 
 @unittest.skipIf(sys.platform != "win32", "Windows frozen executable path semantics")
@@ -41,6 +54,7 @@ def test_save_config_writes_json_atomically(monkeypatch, tmp_path):
     assert load_config() == {"login_at": "token", "userkey": "user", "tkey": "t"}
     assert list(tmp_path.iterdir()) == [config_path]
 
+
 def test_load_config_returns_empty_on_malformed_json(monkeypatch, tmp_path):
     config_path = tmp_path / ".api.json"
     config_path.write_text("{bad", encoding="utf-8")
@@ -66,6 +80,7 @@ def test_attach_auth_cookies_preserves_existing_cookie_header():
 
     assert attach_auth_cookies(Session(), {"Cookie": "existing=1"}) == {"Cookie": "existing=1"}
 
+
 def test_attach_auth_cookies_adds_userkey_tkey_and_last_login():
     class Session:
         def __init__(self):
@@ -75,10 +90,12 @@ def test_attach_auth_cookies_adds_userkey_tkey_and_last_login():
 
     assert attach_auth_cookies(Session(), {}) == {"Cookie": "USERKEY=user; TKEY=token; last_login=basic"}
 
+
 def test_mask_kv_masks_nested_lowercase_loginat_and_t():
     data = {"outer": [{"loginat": "secret"}, {"url": "https://x?_t=still-long-token-value"}]}
 
     assert mask_kv(data) == {"outer": [{"loginat": "***"}, {"url": "https://x?_t=still-long-token-value"}]}
+
 
 def test_extract_t_token_prefers_jwt_at_top_level_result():
     jwt = "a" * 20 + "." + "b" * 20 + "." + "c" * 20
@@ -133,3 +150,65 @@ def _cookie(name: str, value: str) -> Cookie:
         rest={},
         rfc2109=False,
     )
+
+
+def test_normalize_description_converts_br_to_newlines():
+    assert normalize_description("line1<br>line2") == "line1\nline2"
+
+
+def test_normalize_description_strips_html_tags():
+    assert normalize_description("<b>bold</b> text") == "bold text"
+
+
+def test_normalize_description_unescapes_entities():
+    assert normalize_description("a &amp; b") == "a & b"
+
+
+def test_kebab_normalizes_title():
+    assert kebab("Hello World!") == "hello-world"
+
+
+def test_kebab_handles_empty_string():
+    assert kebab("") == "book"
+
+
+def test_sanitize_filename_removes_invalid_chars():
+    assert sanitize_filename('file/with:bad"chars') == "file_with_bad_chars"
+
+
+def test_normalize_url_prepends_https_to_protocol_relative():
+    assert normalize_url("//cdn.example.com/img.jpg") == "https://cdn.example.com/img.jpg"
+
+
+def test_normalize_url_prepends_base_to_relative():
+    assert normalize_url("/novel/123") == "https://global.novelpia.com/novel/123"
+
+
+def test_is_placeholder_userkey_detects_placeholder():
+    assert is_placeholder_userkey("login-user") is True
+    assert is_placeholder_userkey("real-user") is False
+    assert is_placeholder_userkey(None) is False
+
+
+def test_extract_genre_names_from_novel_response():
+    novel = {
+        "result": {
+            "novel": {},
+            "tag_list": [{"tag_name": "Fantasy"}, {"tag_name": "Romance"}],
+        }
+    }
+    assert extract_genre_names(novel) == ["Fantasy", "Romance"]
+
+
+def test_extract_genre_names_deduplicates():
+    novel = {
+        "result": {
+            "novel": {"tag_list": ["Action", "Action"]},
+        }
+    }
+    assert extract_genre_names(novel) == ["Action"]
+
+
+def test_extract_genre_names_handles_string_tags():
+    novel = {"result": {"novel": {"tag_list": ["A", "B"]}}}
+    assert extract_genre_names(novel) == ["A", "B"]

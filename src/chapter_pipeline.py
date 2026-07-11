@@ -121,4 +121,3 @@ def fetch_chapters(
             )
         case unreachable:
             assert_never(unreachable)
-

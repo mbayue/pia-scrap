@@ -46,6 +46,7 @@ logger = get_logger(__name__)
 JsonScalar = str | int | float | bool | None
 JsonObject = Mapping[str, JsonScalar | list[JsonScalar] | Mapping[str, JsonScalar]]
 
+
 class ResponseLike(Protocol):
     status_code: int
     reason: str
@@ -54,6 +55,7 @@ class ResponseLike(Protocol):
 
     def json(self) -> Any: ...
     def raise_for_status(self) -> None: ...
+
 
 class RequestSession(Protocol):
     def request(
@@ -68,9 +70,11 @@ class RequestSession(Protocol):
         timeout: Any = 30,
     ) -> Any: ...
 
+
 # ----------------------------
 # API Client
 # ----------------------------
+
 
 @dataclass
 class Tokens:
@@ -90,6 +94,7 @@ class ApiShapeError(Exception):
             return f"{self.label} missing {self.path}"
         return f"{self.label} expected {self.expected} at {self.path}"
 
+
 RETRY_WAIT_SECONDS = 1.0
 AD_REWARD_WAIT_SECONDS: Final = 5.0
 AD_REWARD_JITTER_SECONDS: Final = (0.1, 0.5)
@@ -98,15 +103,18 @@ AD_REWARD_JITTER_SECONDS: Final = (0.1, 0.5)
 # brand new ticket instead.
 CONTENT_FETCH_ATTEMPTS: Final = 3
 
+
 @dataclass(frozen=True, slots=True)
 class AdRewardRequired:
     novel_no: int
     episode_no: int
 
+
 @dataclass(frozen=True, slots=True)
 class PremiumEpisodeBlocked:
     novel_no: int
     episode_no: int
+
 
 KnownApiBlock = AdRewardRequired | PremiumEpisodeBlocked
 
@@ -128,12 +136,14 @@ class KnownApiBlockError(Exception):
             case unreachable:
                 assert_never(unreachable)
 
+
 def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdecimal():
         return int(value)
     return None
+
 
 def _known_block_episode_numbers(body: Mapping[str, Any], code: str, errmsg: str) -> tuple[int, int] | None:
     if body.get("code") != code and body.get("errmsg") != errmsg:
@@ -153,6 +163,7 @@ def _known_block_episode_numbers(body: Mapping[str, Any], code: str, errmsg: str
         return None
     return novel_no, episode_no
 
+
 def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | None:
     numbers = _known_block_episode_numbers(body, "0008", "novel.ADVERTISEMENT_EPISODE")
     if numbers is None:
@@ -160,12 +171,14 @@ def detect_ad_reward_required(body: Mapping[str, Any]) -> AdRewardRequired | Non
     novel_no, episode_no = numbers
     return AdRewardRequired(novel_no=novel_no, episode_no=episode_no)
 
+
 def detect_premium_episode_blocked(body: Mapping[str, Any]) -> PremiumEpisodeBlocked | None:
     numbers = _known_block_episode_numbers(body, "0009", "novel.PREMIUM_EPISODE")
     if numbers is None:
         return None
     novel_no, episode_no = numbers
     return PremiumEpisodeBlocked(novel_no=novel_no, episode_no=episode_no)
+
 
 def detect_known_api_block(body: Mapping[str, Any]) -> KnownApiBlock | None:
     ad_reward = detect_ad_reward_required(body)
@@ -180,6 +193,7 @@ def _response_json_object(response: ResponseLike, label: str) -> dict[str, Any]:
         raise ApiShapeError(label, "$", "object")
     return raw
 
+
 def _required_object(data: Mapping[str, Any], key: str, path: str, label: str) -> dict[str, Any]:
     value = data.get(key)
     if key not in data:
@@ -188,6 +202,7 @@ def _required_object(data: Mapping[str, Any], key: str, path: str, label: str) -
         raise ApiShapeError(label, path, "object")
     return value
 
+
 def _required_list(data: Mapping[str, Any], key: str, path: str, label: str) -> list[Any]:
     value = data.get(key)
     if key not in data:
@@ -195,6 +210,7 @@ def _required_list(data: Mapping[str, Any], key: str, path: str, label: str) -> 
     if not isinstance(value, list):
         raise ApiShapeError(label, path, "list")
     return value
+
 
 def _parse_writers(writer_list: object) -> list[Writer]:
     """Normalize the raw ``writer_list`` payload into structured ``Writer`` rows."""
@@ -251,6 +267,7 @@ def _parse_novel_response(response: ResponseLike) -> NovelResponse:
         typed_result["tag_list"] = result_tag_list
     return {"result": typed_result}
 
+
 def _parse_episode_list_response(response: ResponseLike) -> EpisodeListResponse:
     body = _response_json_object(response, "episode list response")
     result = _required_object(body, "result", "$.result", "episode list response")
@@ -260,13 +277,20 @@ def _parse_episode_list_response(response: ResponseLike) -> EpisodeListResponse:
         if not isinstance(row, dict):
             raise ApiShapeError("episode list response", f"$.result.list[{index}]", "object")
         episode: EpisodeItem = {}
-        for key in ("episode_no", "epi_num", "epi_title"):
-            value = row.get(key)
-            if value is not None:
-                episode[key] = value
+        epi_title = row.get("epi_title")
+        if epi_title is not None:
+            episode["epi_title"] = epi_title
+        for key in ("episode_no", "epi_num"):
+            raw = row.get(key)
+            if raw is not None:
+                try:
+                    episode[key] = int(raw)
+                except (ValueError, TypeError):
+                    episode[key] = raw  # type: ignore[assignment]
         episodes.append(episode)
     typed_result: EpisodeListResult = {"list": episodes}
     return {"result": typed_result}
+
 
 def _parse_episode_content_response(response: ResponseLike) -> EpisodeContentResponse:
     body = _response_json_object(response, "episode content response")
@@ -297,8 +321,10 @@ def _parse_episode_content_response(response: ResponseLike) -> EpisodeContentRes
         response_body["content"] = content
     return response_body
 
+
 def _safe_error_message(error: Exception) -> str:
     return _re.sub(r"([?&]_t=)[^&\s]+", r"\1<redacted>", str(error))
+
 
 def _collect_epi_content_parts(data_block: Mapping[str, Any]) -> list[str]:
     """Collect and order ``epi_content*`` text fragments from a content data block."""
@@ -319,9 +345,17 @@ def _collect_epi_content_parts(data_block: Mapping[str, Any]) -> list[str]:
 
 
 class NovelpiaClient:
-    def __init__(self, email: str | None = None, password: str | None = None,
-                 proxy: str | None = None, timeout: int = 30, throttle: float = 1.25,
-                 userkey: str | None = None, tkey: str | None = None):
+    def __init__(
+        self,
+        email: str | None = None,
+        password: str | None = None,
+        proxy: str | None = None,
+        timeout: int = 30,
+        throttle: float = 1.25,
+        userkey: str | None = None,
+        tkey: str | None = None,
+        debug: bool = False,
+    ):
         self.s = requests.Session()
         self.s.headers.update(const.SESSION_HEADERS.copy())
         if proxy:
@@ -331,6 +365,7 @@ class NovelpiaClient:
         self.email = email
         self.password = password
         self.throttle = throttle
+        self.debug = debug
         try:
             if not userkey:
                 userkey = uuid.uuid4().hex
@@ -348,13 +383,21 @@ class NovelpiaClient:
     def login(self) -> str | None:
         url = f"{const.API_BASE}/v1/member/login"
         r = request_with_retries(
-            self.s, "POST", url,
+            self.s,
+            "POST",
+            url,
             json={"email": self.email, "passwd": self.password},
-            timeout=self.timeout, max_retries=3,
+            timeout=self.timeout,
+            max_retries=3,
+            debug=self.debug,
         )
         r.raise_for_status()
-        data = r.json()
-        self.tokens.login_at = data["result"]["LOGINAT"]
+        body = _response_json_object(r, "login response")
+        result = _required_object(body, "result", "$.result", "login response")
+        login_at = result.get("LOGINAT")
+        if not isinstance(login_at, str):
+            raise ApiShapeError("login response", "$.result.LOGINAT", "string")
+        self.tokens.login_at = login_at
         auth = cookie_auth_from_jar(self.s.cookies)
         if auth.tkey:
             self.tokens.tkey = auth.tkey
@@ -365,28 +408,44 @@ class NovelpiaClient:
     def refresh(self) -> str | None:
         url = f"{const.API_BASE}/v1/login/refresh"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
-            timeout=self.timeout, max_retries=3,
+            timeout=self.timeout,
+            max_retries=3,
+            debug=self.debug,
         )
         r.raise_for_status()
-        self.tokens.login_at = r.json()["result"]["LOGINAT"]
+        body = _response_json_object(r, "refresh response")
+        result = _required_object(body, "result", "$.result", "refresh response")
+        login_at = result.get("LOGINAT")
+        if not isinstance(login_at, str):
+            raise ApiShapeError("refresh response", "$.result.LOGINAT", "string")
+        self.tokens.login_at = login_at
         cfg = load_config()
         cfg["login_at"] = self.tokens.login_at or ""
-        save_config({
-            "login_at": cfg.get("login_at"),
-            "userkey": cfg.get("userkey"),
-            "tkey": cfg.get("tkey"),
-        })
+        save_config(
+            {
+                "login_at": cfg.get("login_at"),
+                "userkey": cfg.get("userkey"),
+                "tkey": cfg.get("tkey"),
+            }
+        )
         return self.tokens.login_at
 
     def me(self) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/login/me"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
+            debug=self.debug,
         )
         r.raise_for_status()
         return _response_json_object(r, "login/me response")
@@ -394,11 +453,16 @@ class NovelpiaClient:
     def novel(self, novel_id: int) -> NovelResponse:
         url = f"{const.API_BASE}/v1/novel"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id},
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
+            debug=self.debug,
         )
         r.raise_for_status()
         return _parse_novel_response(r)
@@ -406,11 +470,16 @@ class NovelpiaClient:
     def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse:
         url = f"{const.API_BASE}/v1/novel/episode/list"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": novel_id, "rows": rows, "sort": "ASC"},
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
+            debug=self.debug,
         )
         r.raise_for_status()
         return _parse_episode_list_response(r)
@@ -423,11 +492,17 @@ class NovelpiaClient:
         if self.throttle and not skip_throttle:
             time.sleep(self.throttle + random.SystemRandom().uniform(0.1, 0.4))
         r = request_with_retries(
-            self.s, "GET", url,
-            headers=headers, params=params,
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login,
+            self.s,
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
             max_retries=3,
+            debug=self.debug,
             known_block_fn=detect_known_api_block,
         )
         r.raise_for_status()
@@ -436,12 +511,17 @@ class NovelpiaClient:
     def ad_reward_token(self, reward: AdRewardRequired) -> str:
         url = f"{const.API_BASE}/v1/ad/reward/token"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
             params={"novel_no": reward.novel_no, "episode_no": reward.episode_no},
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login,
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
             max_retries=3,
+            debug=self.debug,
         )
         r.raise_for_status()
         body = _response_json_object(r, "ad reward token response")
@@ -454,7 +534,9 @@ class NovelpiaClient:
     def grant_ad_reward(self, reward: AdRewardRequired, token: str) -> dict[str, Any]:
         url = f"{const.API_BASE}/v1/ad/reward/grant"
         r = request_with_retries(
-            self.s, "POST", url,
+            self.s,
+            "POST",
+            url,
             headers=merge_login_at({}, self.tokens.login_at),
             json={
                 "novel_no": reward.novel_no,
@@ -462,9 +544,12 @@ class NovelpiaClient:
                 "flag_success": 1,
                 "token": token,
             },
-            timeout=self.timeout, allow_refresh=True,
-            refresh_fn=self.refresh, login_fn=self.login,
+            timeout=self.timeout,
+            allow_refresh=True,
+            refresh_fn=self.refresh,
+            login_fn=self.login,
             max_retries=3,
+            debug=self.debug,
         )
         r.raise_for_status()
         return _response_json_object(r, "ad reward grant response")
@@ -490,9 +575,13 @@ class NovelpiaClient:
         """
         url = f"{const.API_BASE}/v1/novel/episode/content"
         r = request_with_retries(
-            self.s, "GET", url,
+            self.s,
+            "GET",
+            url,
             params={"_t": token_t},
-            timeout=self.timeout, max_retries=3,
+            timeout=self.timeout,
+            max_retries=3,
+            debug=self.debug,
         )
         r.raise_for_status()
         return _parse_episode_content_response(r)
@@ -582,7 +671,10 @@ class NovelpiaClient:
         }
 
     def fetch_episodes_parallel(
-        self, ep_list: list[EpisodeItem], max_workers: int = 1, progress_cb=None,
+        self,
+        ep_list: list[EpisodeItem],
+        max_workers: int = 1,
+        progress_cb=None,
         on_result: Callable[[int, ChapterResult], None] | None = None,
     ) -> list[ChapterResult]:
         """Fetch multiple episodes in parallel.
@@ -593,10 +685,7 @@ class NovelpiaClient:
         """
         results: list[ChapterResult] = [{} for _ in range(len(ep_list))]
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        future_to_idx = {
-            executor.submit(self.fetch_episode, ep, i + 1): i
-            for i, ep in enumerate(ep_list)
-        }
+        future_to_idx = {executor.submit(self.fetch_episode, ep, i + 1): i for i, ep in enumerate(ep_list)}
         shutdown_done = False
         try:
             for future in concurrent.futures.as_completed(future_to_idx):
@@ -624,6 +713,7 @@ class NovelpiaClient:
                 executor.shutdown(wait=False, cancel_futures=True)
         return results
 
+
 def request_with_retries(
     session: RequestSession,
     method: str,
@@ -639,7 +729,17 @@ def request_with_retries(
     refresh_fn: Callable[[], str | None] | None = None,
     login_fn: Callable[[], str | None] | None = None,
     known_block_fn: Callable[[Mapping[str, Any]], KnownApiBlock | None] | None = None,
+    debug: bool = False,
 ) -> Any:
+    """Execute an HTTP request with retry, auth recovery, and block detection.
+
+    Flow per attempt:
+    1. Build headers (attach auth cookies)
+    2. Send request
+    3. If 5xx: try auth recovery -> handle server error -> retry
+    4. If non-5xx: try auth recovery -> return
+    5. On RequestException: retry with backoff
+    """
     attempt = 0
     last_exc = None
     did_refresh = False
@@ -650,7 +750,7 @@ def request_with_retries(
         try:
             request_headers = _build_request_headers(session, url, base_headers)
 
-            if const.HTTP_LOG:
+            if debug:
                 logger.info(f"[api]   -> {method} {url} (attempt {attempt}/{max_retries})")
                 _log_request_preview(method, session, request_headers, params, json)
 
@@ -661,16 +761,26 @@ def request_with_retries(
             # Novelpia surfaces an expired/invalid session token as HTTP 500 with a
             # "token ... expired" body (not a 401/403), so a 5xx can still be an
             # auth problem worth recovering before the plain server-error retry.
-            should_recover = _recovery_should_trigger(
-                r, allow_refresh, bool(refresh_fn or login_fn), did_login
-            )
+            should_recover = _recovery_should_trigger(r, allow_refresh, bool(refresh_fn or login_fn), did_login)
 
             if r.status_code >= 500:
                 if should_recover:
                     recovered = _try_auth_recovery(
-                        session, url, method, base_headers, params, json, data, timeout,
-                        r, allow_refresh, refresh_fn, login_fn,
-                        did_refresh, did_login,
+                        session,
+                        url,
+                        method,
+                        base_headers,
+                        params,
+                        json,
+                        data,
+                        timeout,
+                        r,
+                        allow_refresh,
+                        refresh_fn,
+                        login_fn,
+                        did_refresh,
+                        did_login,
+                        debug=debug,
                     )
                     if recovered is not None:
                         r, did_refresh, did_login = recovered
@@ -679,24 +789,34 @@ def request_with_retries(
                         # Recovered response is still a server error; fall through to
                         # the same >=500 handling below (known-block detection,
                         # retry/raise) instead of bypassing it.
-                recovered_response = _handle_server_error(
-                    r, attempt, max_retries, known_block_fn
-                )
+                recovered_response = _handle_server_error(r, attempt, max_retries, known_block_fn, debug=debug)
                 if recovered_response is not None:
                     r = recovered_response
                     return r
                 continue
 
             recovered = _try_auth_recovery(
-                session, url, method, base_headers, params, json, data, timeout,
-                r, allow_refresh, refresh_fn, login_fn,
-                did_refresh, did_login,
+                session,
+                url,
+                method,
+                base_headers,
+                params,
+                json,
+                data,
+                timeout,
+                r,
+                allow_refresh,
+                refresh_fn,
+                login_fn,
+                did_refresh,
+                did_login,
+                debug=debug,
             )
             if recovered is not None:
                 r, did_refresh, did_login = recovered
             return r
         except requests.RequestException as e:
-            if const.HTTP_LOG:
+            if debug:
                 logger.info(f"[api] !! {method} {url} failed on attempt {attempt}: {e}")
             last_exc = e
             if attempt < max_retries:
@@ -758,20 +878,22 @@ def _handle_server_error(
     attempt: int,
     max_retries: int,
     known_block_fn: Callable[[Mapping[str, Any]], KnownApiBlock | None] | None,
+    *,
+    debug: bool = False,
 ) -> ResponseLike | None:
     """Handle a >=500 response: log, detect known API blocks, retry or raise.
 
     Returns ``None`` if the caller should ``continue`` the retry loop, or a
     replacement response when a known block was raised (handled by caller).
     """
-    if const.HTTP_LOG:
+    if debug:
         _log_failed_response(r)
 
     api_message = ""
     try:
         body = r.json()
     except Exception as e:  # noqa: BLE001 - error body may be malformed
-        if const.HTTP_LOG:
+        if debug:
             logger.error(f"Error occurred while reading API error message: {e}")
     else:
         if isinstance(body, Mapping):
@@ -798,6 +920,8 @@ def _recovery_should_trigger(
     allow_refresh: bool,
     has_auth_fns: bool,
     did_login: bool,
+    *,
+    debug: bool = False,
 ) -> bool:
     """Decide whether an expired-session response warrants auth recovery.
 
@@ -814,7 +938,7 @@ def _recovery_should_trigger(
         body = r.json()
         msg = (body.get("errmsg") or body.get("message") or "").lower()
     except Exception as e:  # noqa: BLE001 - error body may be malformed
-        if const.HTTP_LOG:
+        if debug:
             logger.error(f"Error occurred while reading API error response: {e}")
     return "token" in msg and "expire" in msg
 
@@ -824,29 +948,31 @@ def _run_refresh_then_login(
     login_fn: Callable[[], str | None] | None,
     did_refresh: bool,
     did_login: bool,
+    *,
+    debug: bool = False,
 ) -> tuple[bool, str | None, bool, bool]:
     """Run refresh then full login; return (success, login_at, did_refresh, did_login)."""
     success = False
     recovered_login_at: str | None = None
     if refresh_fn and not did_refresh:
-        if const.HTTP_LOG:
+        if debug:
             logger.info("[api] Session token expired (HTTP 500), trying refresh...")
         try:
             recovered_login_at = refresh_fn()
             did_refresh = True
             success = True
         except Exception:  # noqa: BLE001 - refresh best-effort
-            if const.HTTP_LOG:
+            if debug:
                 logger.info("[api] Refresh failed.")
     if not success and login_fn and not did_login:
-        if const.HTTP_LOG:
+        if debug:
             logger.info("[api] Refresh failed or unavailable, trying full re-login...")
         try:
             recovered_login_at = login_fn()
             did_login = True
             success = True
         except Exception as e:  # noqa: BLE001 - login best-effort
-            if const.HTTP_LOG:
+            if debug:
                 logger.info(f"[api] Re-login failed: {e}")
     return success, recovered_login_at, did_refresh, did_login
 
@@ -866,6 +992,8 @@ def _try_auth_recovery(
     login_fn: Callable[[], str | None] | None,
     did_refresh: bool,
     did_login: bool,
+    *,
+    debug: bool = False,
 ) -> tuple[ResponseLike, bool, bool] | None:
     """Attempt auth recovery (refresh, then full login) when Novelpia reports the
     session token expired -- surfaced as HTTP 500 with a ``"token ... expired"``
@@ -874,13 +1002,11 @@ def _try_auth_recovery(
     Returns the re-requested response plus updated refresh/login flags, or
     ``None`` when no recovery was triggered (the original response stands).
     """
-    if not _recovery_should_trigger(
-        r, allow_refresh, bool(refresh_fn or login_fn), did_login
-    ):
+    if not _recovery_should_trigger(r, allow_refresh, bool(refresh_fn or login_fn), did_login, debug=debug):
         return None
 
     success, recovered_login_at, did_refresh, did_login = _run_refresh_then_login(
-        refresh_fn, login_fn, did_refresh, did_login
+        refresh_fn, login_fn, did_refresh, did_login, debug=debug
     )
     if not success:
         return None

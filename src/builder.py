@@ -15,10 +15,10 @@ from src.chapter_pipeline import (
     fetch_chapters,
     select_episodes,
 )
-from src.contracts import ChapterResult, EpisodeItem, EpisodeListResponse, NovelResponse
+from src.contracts import ChapterResult, EpisodeItem, EpisodeListResponse, NovelResponse, chapter_is_error
 from src.epub import EpubBuilder
 from src.export import write_txt_chapters
-from src.helper import ensure_dir, kebab, normalize_description
+from src.helper import ensure_dir, extract_genre_names, kebab, normalize_description
 from src.novel import fetch_novel_and_episodes
 
 
@@ -50,6 +50,52 @@ class BuilderClient(Protocol):
     def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> Mapping[str, str]: ...
 
 
+def _prepare_chapters(
+    client: BuilderClient,
+    novel_id: int,
+    out_dir: str,
+    start_chapter: int | None,
+    end_chapter: int | None,
+    max_chapters: int | None,
+    update: bool,
+    retry_failed: bool,
+    max_workers: int,
+) -> tuple[NovelResponse, list[EpisodeItem], str, str, list[ChapterResult]] | None:
+    """Shared fetch/select/merge logic for build_epub and build_txt.
+
+    Returns (data_novel, ep_list, title, book_dir, build_results) or None for no-op.
+    """
+    data_novel, ep_list, title, account_status = fetch_novel_and_episodes(client, novel_id)
+    ep_list = select_episodes(ep_list, ChapterSelection(start_chapter, end_chapter, max_chapters))
+
+    base = kebab(title)
+    book_dir = os.path.join(out_dir, base)
+    ensure_dir(book_dir)
+
+    if retry_failed and not load_failed_episode_nos(book_dir):
+        return None
+
+    fetched_results, fetched_count = fetch_chapters(
+        client,
+        book_dir,
+        ep_list,
+        ChapterFetchMode(
+            update=update,
+            retry_failed=retry_failed,
+            max_workers=max_workers,
+            account_policy=AccountChapterPolicy(account_status),
+        ),
+    )
+    if update and fetched_count == 0:
+        return None
+
+    build_results = merge_cache_with_fetched(ep_list, fetched_results, book_dir)
+    if not build_results:
+        return None
+
+    return data_novel, ep_list, title, book_dir, build_results
+
+
 def build_epub(
     client: BuilderClient,
     novel_id: int,
@@ -63,47 +109,26 @@ def build_epub(
     retry_failed: bool = False,
     max_workers: int = 1,
 ) -> tuple[str | None, str, int]:
-    data_novel, ep_list, title, account_status = fetch_novel_and_episodes(client, novel_id)
-    ep_list = select_episodes(ep_list, ChapterSelection(start_chapter, end_chapter, max_chapters))
-
-    builder = EpubBuilder(out_dir, debug_dump=debug_dump)
-
-    base = kebab(title)
-    book_dir = os.path.join(out_dir, base)
-    ensure_dir(book_dir)
-
-    # --retry-failed is a no-op when there are no failed chapters at all. This
-    # must run BEFORE fetching, because a successful retry clears the failure
-    # list, so by the time fetch returns the file would already be gone.
-    if retry_failed and not load_failed_episode_nos(book_dir):
-        return None, title, 0
-
-    fetched_results, fetched_count = fetch_chapters(
+    """Build an EPUB file for the given novel. Returns (path, title, chapter_count) or (None, title, 0) for no-op."""
+    result = _prepare_chapters(
         client,
-        book_dir,
-        ep_list,
-        ChapterFetchMode(
-            update=update,
-            retry_failed=retry_failed,
-            max_workers=max_workers,
-            account_policy=AccountChapterPolicy(account_status),
-        ),
+        novel_id,
+        out_dir,
+        start_chapter,
+        end_chapter,
+        max_chapters,
+        update,
+        retry_failed,
+        max_workers,
     )
-    # --update is a no-op when the API returned no new chapters: leave any existing
-    # build untouched and let the caller report "no updates".
-    if update and fetched_count == 0:
-        return None, title, 0
-
-    # Render from on-disk .cache merged with this run's fresh fetches, so a
-    # --retry-failed run rebuilds the book from cached + retried chapters (and an
-    # --update run picks up any progress that was cached before a cancel).
-    build_results = merge_cache_with_fetched(ep_list, fetched_results, book_dir)
-    if not build_results:
-        return None, title, 0
+    if result is None:
+        return None, "", 0
+    data_novel, ep_list, title, book_dir, build_results = result
 
     completed_ep_list = completed_episodes(ep_list, build_results)
     build_metadata(book_dir, data_novel, novel_id, completed_ep_list)
 
+    builder = EpubBuilder(out_dir, debug_dump=debug_dump)
     return builder.build(
         client=client,
         novel=data_novel,
@@ -129,40 +154,23 @@ def build_txt(
     retry_failed: bool = False,
     max_workers: int = 1,
 ) -> tuple[str | None, str, int]:
-    data_novel, ep_list, title, account_status = fetch_novel_and_episodes(client, novel_id)
-    ep_list = select_episodes(ep_list, ChapterSelection(start_chapter, end_chapter, max_chapters))
-
-    base = kebab(title)
-    book_dir = os.path.join(out_dir, base)
-    ensure_dir(book_dir)
-
-    # --retry-failed is a no-op when there are no failed chapters at all (see build_epub).
-    if retry_failed and not load_failed_episode_nos(book_dir):
-        return None, title, 0
-
-    fetched_results, fetched_count = fetch_chapters(
+    """Build TXT files for the given novel. Returns (dir_path, title, chapter_count) or (None, title, 0) for no-op."""
+    result = _prepare_chapters(
         client,
-        book_dir,
-        ep_list,
-        ChapterFetchMode(
-            update=update,
-            retry_failed=retry_failed,
-            max_workers=max_workers,
-            account_policy=AccountChapterPolicy(account_status),
-        ),
+        novel_id,
+        out_dir,
+        start_chapter,
+        end_chapter,
+        max_chapters,
+        update,
+        retry_failed,
+        max_workers,
     )
-    # --update is a no-op when the API returned no new chapters (see build_epub);
-    # --retry-failed then rebuilds from .cache below.
-    if update and fetched_count == 0:
-        return None, title, 0
-
-    # Render from on-disk .cache merged with this run's fresh fetches (see build_epub).
-    build_results = merge_cache_with_fetched(ep_list, fetched_results, book_dir)
-    if not build_results:
-        return None, title, 0
+    if result is None:
+        return None, "", 0
+    data_novel, ep_list, title, book_dir, build_results = result
 
     total = write_txt_chapters(book_dir, build_results)
-
     build_metadata(book_dir, data_novel, novel_id, completed_episodes(ep_list, build_results))
 
     return book_dir, title, total
@@ -205,7 +213,7 @@ def merge_cache_with_fetched(
         epi_no_raw = res.get("epi_no")
         if not isinstance(epi_no_raw, int):
             continue
-        if "error" in res:
+        if chapter_is_error(res):
             failed_epi_nos.add(epi_no_raw)
         else:
             fresh_by_epi[epi_no_raw] = res
@@ -237,7 +245,7 @@ def completed_episodes(ep_list: list[EpisodeItem], fetched_results: Sequence[Cha
     completed_nos: set[int] = set()
     for row in fetched_results:
         row_epi_no = row.get("epi_no")
-        if row and "error" not in row and row_epi_no is not None and row.get("html"):
+        if row and not chapter_is_error(row) and row_epi_no is not None and row.get("html"):
             completed_nos.add(int(row_epi_no))
     if not completed_nos:
         return []
@@ -259,16 +267,7 @@ def build_metadata(
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
     description = normalize_description(nv.get("novel_story") or "")
 
-    tag_items = result.get("tag_list") or nv.get("tag_list") or []
-    tags: list[str] = []
-    for t in tag_items:
-        if isinstance(t, str):
-            tags.append(t)
-        elif isinstance(t, dict):
-            val = t.get("tag_name") or t.get("name") or t.get("title")
-            if isinstance(val, str):
-                tags.append(val)
-    uniq_tags = list(dict.fromkeys(tags))
+    uniq_tags = extract_genre_names(data_novel)
 
     meta = {
         "url": f"https://global.novelpia.com/novel/{novel_id}",

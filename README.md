@@ -6,6 +6,20 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
+## What's New in 2.6.0
+
+* **Dark mode web dashboard**: toggle between light/dark themes, persisted in browser.
+* **Progress bar**: visual progress indicator on the web dashboard with color-coded states.
+* **Log filtering**: real-time text filter for log output on the web dashboard.
+* **Job history API**: `GET /api/jobs` returns all jobs sorted by creation time.
+* **Rate limiting**: web API limits concurrent jobs to 4 (HTTP 429 on overflow).
+* **Integration tests**: 8 tests exercising the full pipeline (API → fetch → build → output).
+* **CI lint gate**: ruff check + format runs on every push.
+* **Code quality**: 25 issues fixed — thread-safe debug logging, DRY refactors, missing tests, type improvements.
+* **Optional web dependencies**: `fastapi`/`uvicorn` moved to `[web]` extras — CLI installs stay lean.
+
+---
+
 ## What's New in 2.5.0
 
 * **Fixed stale-ticket retry storm**: chapter content fetches that hit a transient `403` now retry with a freshly-minted episode ticket instead of resending the same expired one, and no longer waste time on pointless session refreshes that couldn't have fixed the problem. Downloads recover in ~1 retry instead of stalling for several seconds per chapter.
@@ -31,6 +45,7 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 * **Session Recovery**: Retries server errors and refreshes expired sessions when credentials are available.
 * EPUB output with cover, About page, genre metadata, per-chapter files, ToC, NCX/Nav.
 * Preserves inline images (downloaded and embedded).
+* **Web Dashboard**: FastAPI-based UI with dark mode, progress tracking, job history, and log filtering.
 
 ---
 

@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from ebooklib import epub
 
 from src.const import BASE_URL
-from src.contracts import ChapterResult
+from src.contracts import ChapterResult, chapter_is_error
 from src.helper import media_type_from_ext, normalize_url, sanitize_filename
 from src.logutil import get_logger
 
@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 class ImageClient(Protocol):
     s: requests.Session
     timeout: int
+
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 IMAGE_EXTENSION_BY_MEDIA_TYPE = {
@@ -66,9 +67,7 @@ def cloudfront_cookie_key(cookie_name: str) -> str | None:
     return None
 
 
-def _iter_cloudfront_cookies(
-    client: ImageClient, debug_dump: bool
-) -> Iterator[tuple[str, str | None]]:
+def _iter_cloudfront_cookies(client: ImageClient, debug_dump: bool) -> Iterator[tuple[str, str | None]]:
     """Yield (cookie_name, cookie_value) for CloudFront-signed cookies.
 
     Tolerates a malformed cookie jar (logs once under debug_dump) so image
@@ -93,21 +92,14 @@ class ImageFetcher:
             "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "referer": BASE_URL + "/",
         }
-        cloudfront_parts = [
-            f"{name}={value}" for name, value in _iter_cloudfront_cookies(client, self.debug_dump)
-        ]
+        cloudfront_parts = [f"{name}={value}" for name, value in _iter_cloudfront_cookies(client, self.debug_dump)]
         if cloudfront_parts:
             headers["Cookie"] = "; ".join(cloudfront_parts)
         return headers
 
     def can_fetch_chapter_images(self, client: ImageClient) -> bool:
-        matched_keys = {
-            cloudfront_cookie_key(name)
-            for name, _ in _iter_cloudfront_cookies(client, self.debug_dump)
-        }
-        return SIGNED_COOKIE_KEYS.issubset(matched_keys) and bool(
-            matched_keys.intersection(SIGNED_POLICY_COOKIE_KEYS)
-        )
+        matched_keys = {cloudfront_cookie_key(name) for name, _ in _iter_cloudfront_cookies(client, self.debug_dump)}
+        return SIGNED_COOKIE_KEYS.issubset(matched_keys) and bool(matched_keys.intersection(SIGNED_POLICY_COOKIE_KEYS))
 
     def fetch_bytes(self, client: ImageClient, url: str) -> bytes | None:
         fetched = self.fetch_image(client, url)
@@ -118,9 +110,7 @@ class ImageFetcher:
     def fetch_image(self, client: ImageClient, url: str) -> tuple[bytes, str] | None:
         for attempt in range(1, IMAGE_MAX_RETRIES + 1):
             try:
-                resp = client.s.get(
-                    url, headers=self.fetch_headers(client), timeout=client.timeout
-                )
+                resp = client.s.get(url, headers=self.fetch_headers(client), timeout=client.timeout)
                 if resp.status_code == 429:
                     time.sleep(IMAGE_429_BACKOFF_SECONDS * attempt)
                     continue
@@ -148,9 +138,7 @@ class ImageFetcher:
                 requests.RequestException,
             ) as exc:
                 status_code = (
-                    exc.response.status_code
-                    if isinstance(exc, requests.HTTPError) and exc.response is not None
-                    else 0
+                    exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else 0
                 )
                 if isinstance(exc, requests.HTTPError) and 400 <= status_code < 500:
                     if self.debug_dump:
@@ -217,7 +205,7 @@ class EpubImageAdapter:
 def write_txt_chapters(book_dir: str, fetched_results: list[ChapterResult]) -> int:
     total = 0
     for i, res in enumerate(fetched_results, 1):
-        if not res or "error" in res:
+        if not res or chapter_is_error(res):
             err = res.get("error") if res else "Unknown error"
             logger.warning(f"[warn] Failed to fetch chapter {i}: {err}")
             continue

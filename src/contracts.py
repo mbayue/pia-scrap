@@ -75,6 +75,11 @@ class ChapterResult(TypedDict, total=False):
     idx: int
 
 
+def chapter_is_error(ch: ChapterResult) -> bool:
+    """Check if a ChapterResult represents an error."""
+    return "error" in ch
+
+
 class FailedChapter(TypedDict, total=False):
     idx: int
     epi_no: int | None
@@ -82,12 +87,14 @@ class FailedChapter(TypedDict, total=False):
     url: str
     error: str
 
+
 class QueueSummaryRow(TypedDict):
     novel_id: int
     status: str
     chapters: int | None
     title: str
     path: str | None
+
 
 class QueueResult(TypedDict):
     rows: list[QueueSummaryRow]

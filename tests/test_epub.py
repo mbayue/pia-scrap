@@ -2,7 +2,7 @@ import requests
 
 from src.api import NovelpiaClient
 from src.contracts import NovelResponse
-from src.epub import EpubBuilder
+from src.epub import EpubBuilder, _epub_date
 from src.export import EpubImageAdapter, ImageFetcher, write_txt_chapters
 
 
@@ -111,7 +111,9 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
         novel,
         [{"episode_no": 1, "epi_title": "One"}],
         filename_hint="Book",
-        fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}],
+        fetched_results=[
+            {"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}
+        ],
     )
 
     chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
@@ -163,6 +165,7 @@ def test_build_about_page_includes_genres(monkeypatch, tmp_path):
 
     about = next(item for item in written[0][1].get_items() if item.file_name == "about.xhtml")
     assert "<strong>Genre:</strong> Fantasy, Comedy, Drama" in about.content
+
 
 def test_build_falls_back_to_novel_img_when_full_img_bytes_are_not_a_real_image(monkeypatch, tmp_path):
     # Regression: novel_full_img can come back with a Content-Type/URL that
@@ -287,3 +290,15 @@ def test_write_txt_chapters_exports_successful_chapter_and_skips_failed(tmp_path
     assert count == 1
     assert (tmp_path / "1_One.txt").read_text(encoding="utf-8") == "Hello\nworld"
     assert "[warn] Failed to fetch chapter 2: blocked" in capsys.readouterr().out
+
+
+def test_epub_date_extracts_date_part():
+    assert _epub_date("2024-01-15 10:30:00") == "2024-01-15"
+
+
+def test_epub_date_returns_none_for_empty():
+    assert _epub_date("") is None
+
+
+def test_epub_date_returns_none_for_none():
+    assert _epub_date(None) is None

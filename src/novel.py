@@ -19,9 +19,11 @@ class NovelMetadataClient(Protocol):
 
     def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse: ...
 
+
 # ----------------------------
 # Novelpia Novel & Episodes Fetcher
 # ----------------------------
+
 
 def html_from_episode_text(raw_html: str) -> str:
     soup = BeautifulSoup(raw_html or "", "lxml")
@@ -64,6 +66,7 @@ def html_from_episode_text(raw_html: str) -> str:
 
     return str(soup)
 
+
 def user_subscription_status(me_response: object) -> AccountStatus:
     if not isinstance(me_response, dict):
         return "unknown"
@@ -82,6 +85,7 @@ def user_subscription_status(me_response: object) -> AccountStatus:
     if isinstance(plus_type, str) and plus_type.isdecimal():
         return "paid" if int(plus_type) != 0 else "free"
     return "unknown"
+
 
 def fetch_novel_and_episodes(
     client: NovelMetadataClient,
@@ -106,7 +110,7 @@ def fetch_novel_and_episodes(
     title = nv.get("novel_name", f"novel_{novel_id}")
     epi_cnt = data_novel["result"].get("info", {}).get("epi_cnt") or nv.get("count_epi") or 0
     writers = data_novel["result"].get("writer_list") or []
-    author = (writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author")
+    author = writers[0].get("writer_name") if writers and writers[0].get("writer_name") else "Unknown Author"
     status = "Completed" if str(nv.get("flag_complete", 0)) == "1" else "Ongoing"
 
     logger.info(f"[info] title='{title}' author='{author}' chapter={epi_cnt} status={status}")

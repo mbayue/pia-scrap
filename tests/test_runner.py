@@ -79,6 +79,7 @@ def test_run_queue_closes_client_after_build_failure(monkeypatch):
     assert result["failures"] == [(49, "boom")]
     assert closed == [True]
 
+
 def test_main_merges_cli_and_queue_options(monkeypatch, tmp_path):
     queue_path = tmp_path / "queue.txt"
     queue_path.write_text("5522\n49\n", encoding="utf-8")
@@ -90,36 +91,39 @@ def test_main_merges_cli_and_queue_options(monkeypatch, tmp_path):
         captured["options"] = options
         return {"rows": [], "failures": [], "skipped_ids": []}
 
-    monkeypatch.setattr("sys.argv", [
-        "main.py",
-        "468",
-        "-q",
-        str(queue_path),
-        "-out",
-        "books",
-        "-max",
-        "5",
-        "-start",
-        "2",
-        "-end",
-        "6",
-        "-lang",
-        "ko",
-        "-proxy",
-        "http://proxy",
-        "-v",
-        "-t",
-        "0.5",
-        "-w",
-        "3",
-        "-up",
-        "-r",
-        "-txt",
-        "-u",
-        "u@example.com",
-        "-p",
-        secret,
-    ])
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            "468",
+            "-q",
+            str(queue_path),
+            "-out",
+            "books",
+            "-max",
+            "5",
+            "-start",
+            "2",
+            "-end",
+            "6",
+            "-lang",
+            "ko",
+            "-proxy",
+            "http://proxy",
+            "-v",
+            "-t",
+            "0.5",
+            "-w",
+            "3",
+            "-up",
+            "-r",
+            "-txt",
+            "-u",
+            "u@example.com",
+            "-p",
+            secret,
+        ],
+    )
     monkeypatch.setattr("main.run_queue", fake_run_queue)
 
     main.main()
@@ -143,10 +147,12 @@ def test_main_merges_cli_and_queue_options(monkeypatch, tmp_path):
         password=secret,
     )
 
+
 def test_packaged_windows_no_args_usage_error_pauses():
     assert main.should_pause_on_usage_error(["pia-scrap.exe"], is_frozen=True, os_name="nt") is True
     assert main.should_pause_on_usage_error(["pia-scrap.exe", "5522"], is_frozen=True, os_name="nt") is False
     assert main.should_pause_on_usage_error(["main.py"], is_frozen=False, os_name="nt") is False
+
 
 def test_packaged_windows_no_args_hint_uses_powershell_path(monkeypatch, capsys):
     monkeypatch.setattr(main, "should_pause_on_usage_error", lambda argv, is_frozen, os_name: True)
@@ -158,6 +164,7 @@ def test_packaged_windows_no_args_hint_uses_powershell_path(monkeypatch, capsys)
     assert "PowerShell: .\\pia-scrap.exe 5522" in output
     assert "Command Prompt: pia-scrap.exe 5522" in output
 
+
 def test_build_queue_request_reports_missing_queue_file(tmp_path):
     missing = tmp_path / "missing.txt"
 
@@ -167,6 +174,7 @@ def test_build_queue_request_reports_missing_queue_file(tmp_path):
         assert f"Unable to read queue file '{missing}'" in str(exc)
     else:
         raise AssertionError("expected CliUsageError")
+
 
 def test_build_queue_request_reports_queue_line_source(tmp_path):
     queue_path = tmp_path / "queue.txt"
@@ -178,6 +186,7 @@ def test_build_queue_request_reports_queue_line_source(tmp_path):
         assert str(exc) == f"{queue_path}:2: invalid novel_id or novel URL 'bad'"
     else:
         raise AssertionError("expected CliUsageError")
+
 
 def test_build_queue_request_sets_summary_for_queue_file(tmp_path):
     queue_path = tmp_path / "queue.txt"
@@ -207,6 +216,7 @@ def test_build_queue_request_rejects_invalid_numeric_options():
         else:
             raise AssertionError(f"expected CliUsageError for {overrides}")
 
+
 def test_build_queue_request_rejects_non_finite_throttle():
     for throttle in (float("nan"), float("inf")):
         try:
@@ -215,6 +225,7 @@ def test_build_queue_request_rejects_non_finite_throttle():
             assert str(exc) == "-t/--throttle must be a finite number"
         else:
             raise AssertionError(f"expected CliUsageError for throttle={throttle}")
+
 
 def _cli_args(**overrides: CliValue):
     values: dict[str, CliValue] = {
@@ -240,11 +251,13 @@ def _cli_args(**overrides: CliValue):
     values.update(overrides)
     return Namespace(**values)
 
+
 @dataclass
 class AuthTokens:
     login_at: str | None = None
     userkey: str | None = None
     tkey: str | None = None
+
 
 class AuthClient:
     def __init__(self, **kwargs):
@@ -259,6 +272,7 @@ class AuthClient:
         self.tokens.login_at = "login-token"
         self.s.cookies.set("USERKEY", "login-user")
         self.s.cookies.set("TKEY", "login-t")
+
 
 def as_auth_client(client: object) -> AuthClient:
     assert isinstance(client, AuthClient)
@@ -288,11 +302,14 @@ def test_create_client_prefers_cookie_text_over_email_and_config(monkeypatch):
     monkeypatch.setenv("NOVELPIA_EMAIL", "env@example.com")
     monkeypatch.setenv("NOVELPIA_PASSWORD", "env-pw")
     monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
-    monkeypatch.setattr("src.runner.load_config", lambda: {
-        "login_at": "cfg-login",
-        "userkey": "cfg-user",
-        "tkey": "cfg-t",
-    })
+    monkeypatch.setattr(
+        "src.runner.load_config",
+        lambda: {
+            "login_at": "cfg-login",
+            "userkey": "cfg-user",
+            "tkey": "cfg-t",
+        },
+    )
     monkeypatch.setattr("src.runner.load_netscape_cookies_text", lambda _text: jar)
     monkeypatch.setattr("src.runner.save_config", lambda cfg: saved.append(cfg))
     monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
@@ -322,11 +339,14 @@ def test_create_client_loads_env_next_to_frozen_executable(monkeypatch, tmp_path
     monkeypatch.delenv("NOVELPIA_COOKIE_FILE", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT_B64", raising=False)
-    monkeypatch.setattr("src.runner.load_config", lambda: {
-        "login_at": "cfg-login",
-        "userkey": "cfg-user",
-        "tkey": "cfg-t",
-    })
+    monkeypatch.setattr(
+        "src.runner.load_config",
+        lambda: {
+            "login_at": "cfg-login",
+            "userkey": "cfg-user",
+            "tkey": "cfg-t",
+        },
+    )
     monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
 
     create_client(QueueOptions())
@@ -340,11 +360,14 @@ def test_create_client_prefers_email_password_over_stored_tokens(monkeypatch):
     monkeypatch.delenv("NOVELPIA_COOKIE_FILE", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT_B64", raising=False)
-    monkeypatch.setattr("src.runner.load_config", lambda: {
-        "login_at": "cfg-login",
-        "userkey": "cfg-user",
-        "tkey": "cfg-t",
-    })
+    monkeypatch.setattr(
+        "src.runner.load_config",
+        lambda: {
+            "login_at": "cfg-login",
+            "userkey": "cfg-user",
+            "tkey": "cfg-t",
+        },
+    )
     monkeypatch.setattr("src.runner.save_config", lambda cfg: saved.append(cfg))
     monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
 
@@ -357,6 +380,7 @@ def test_create_client_prefers_email_password_over_stored_tokens(monkeypatch):
     assert kwargs["userkey"] == "cfg-user"
     assert client.login_calls == 1
     assert saved == [{"login_at": "login-token", "userkey": "cfg-user", "tkey": "login-t"}]
+
 
 def test_create_client_keeps_generated_userkey_when_login_cookie_is_placeholder(monkeypatch):
     saved = []
@@ -374,6 +398,7 @@ def test_create_client_keeps_generated_userkey_when_login_cookie_is_placeholder(
     assert client.login_calls == 1
     assert saved == [{"login_at": "login-token", "userkey": "generated-user", "tkey": "login-t"}]
 
+
 def test_create_client_ignores_stored_placeholder_userkey(monkeypatch):
     saved = []
     monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
@@ -390,6 +415,7 @@ def test_create_client_ignores_stored_placeholder_userkey(monkeypatch):
     assert client.kwargs["userkey"] is None
     assert saved == [{"login_at": "login-token", "userkey": "generated-user", "tkey": "login-t"}]
 
+
 def test_create_client_uses_stored_tokens_when_no_inputs(monkeypatch):
     monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
     monkeypatch.delenv("NOVELPIA_EMAIL", raising=False)
@@ -397,11 +423,14 @@ def test_create_client_uses_stored_tokens_when_no_inputs(monkeypatch):
     monkeypatch.delenv("NOVELPIA_COOKIE_FILE", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT", raising=False)
     monkeypatch.delenv("NOVELPIA_COOKIE_TEXT_B64", raising=False)
-    monkeypatch.setattr("src.runner.load_config", lambda: {
-        "login_at": "cfg-login",
-        "userkey": "cfg-user",
-        "tkey": "cfg-t",
-    })
+    monkeypatch.setattr(
+        "src.runner.load_config",
+        lambda: {
+            "login_at": "cfg-login",
+            "userkey": "cfg-user",
+            "tkey": "cfg-t",
+        },
+    )
     monkeypatch.setattr("src.runner.NovelpiaClient", AuthClient)
 
     client = as_auth_client(create_client(QueueOptions()))
@@ -411,6 +440,7 @@ def test_create_client_uses_stored_tokens_when_no_inputs(monkeypatch):
     assert kwargs["userkey"] == "cfg-user"
     assert client.tokens.login_at == "cfg-login"
     assert client.login_calls == 0
+
 
 def test_create_client_uses_env_cookie_text_before_cookie_file(monkeypatch):
     saved = []
@@ -431,6 +461,7 @@ def test_create_client_uses_env_cookie_text_before_cookie_file(monkeypatch):
     assert client.tokens.userkey == "text-user"
     assert saved == [{"login_at": "", "userkey": "text-user", "tkey": ""}]
 
+
 def test_create_client_uses_env_login_at_before_config_for_cookies(monkeypatch):
     saved = []
     jar = RequestsCookieJar()
@@ -447,6 +478,7 @@ def test_create_client_uses_env_login_at_before_config_for_cookies(monkeypatch):
 
     assert client.tokens.login_at == "env-login"
     assert saved == [{"login_at": "env-login", "userkey": "cookie-user", "tkey": ""}]
+
 
 def test_create_client_rejects_cookie_auth_without_userkey(monkeypatch):
     monkeypatch.setattr("src.runner.load_dotenv", lambda: None)
@@ -493,6 +525,7 @@ def test_create_client_raises_without_credentials_or_tokens(monkeypatch):
         assert "No credentials or stored tokens found" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
 
 def _fail_cookie_file_load():
     raise AssertionError("cookie file should not load")
