@@ -1,5 +1,3 @@
-import re
-from enum import Enum
 from typing import TypedDict
 
 
@@ -100,32 +98,3 @@ class QueueResult(TypedDict):
     rows: list[QueueSummaryRow]
     failures: list[tuple[int, str]]
     skipped_ids: list[int]
-
-
-# Canonical source of truth for the label strings that flow between the live
-# API client (which produces them in KnownApiBlockError.__str__) and the cache
-# layer (which parses them back out of stored error strings). Keep these in one
-# place so the two representations cannot drift apart.
-class BlockKind(str, Enum):
-    AD_REWARD = "ad reward required"
-    PREMIUM = "premium episode blocked"
-
-
-_BLOCK_LABEL_PATTERN = "|".join(re.escape(kind.value) for kind in BlockKind)
-_BLOCK_RE = re.compile(
-    rf"^(?P<label>{_BLOCK_LABEL_PATTERN}): "
-    r"novel_no=(?P<novel_no>\d+) episode_no=(?P<episode_no>\d+)$"
-)
-
-
-def format_block_label(kind: BlockKind, novel_no: int, episode_no: int) -> str:
-    return f"{kind.value}: novel_no={novel_no} episode_no={episode_no}"
-
-
-def parse_block_label(text: str) -> tuple[BlockKind, int, int] | None:
-    match = _BLOCK_RE.match(text)
-    if match is None:
-        return None
-    label = match.group("label")
-    kind = BlockKind(label)
-    return kind, int(match.group("novel_no")), int(match.group("episode_no"))

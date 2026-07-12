@@ -20,11 +20,15 @@ logger = get_logger(__name__)
 # ----------------------------
 
 
-def extract_genre_names(novel: dict[str, Any]) -> list[str]:
+def extract_genre_names(novel: Mapping[str, Any]) -> list[str]:
     """Extract unique genre/tag names from a NovelResponse."""
     result = novel.get("result", {})
-    nv = result.get("novel", {})
-    tag_items = result.get("tag_list") or nv.get("tag_list") or []
+    nv = result.get("novel", {}) if isinstance(result, Mapping) else {}
+    tag_items = (
+        (result.get("tag_list") if isinstance(result, Mapping) else None)
+        or (nv.get("tag_list") if isinstance(nv, Mapping) else None)
+        or []
+    )
     names: list[str] = []
     for tag in tag_items:
         if isinstance(tag, str):
@@ -139,6 +143,7 @@ def load_config() -> AuthConfig:
                 if isinstance(raw, dict):
                     return normalize_auth_config({str(k): v for k, v in raw.items()})
                 logger.error("Error occurred while loading config: config root is not an object")
+                return normalize_auth_config({})
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         logger.error(f"Error occurred while loading config: {e}")
         return {}

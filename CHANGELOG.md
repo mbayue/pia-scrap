@@ -2,6 +2,26 @@
 
 All notable changes to PIA Scrap will be documented in this file.
 
+## [2.7.0] - 2026-07-12
+
+### Added
+
+- Free/unknown account parallel chapter workers (`-w` / web `workers`)
+- Per-chapter ad unlock under free parallel path with ordered premium stop
+- `requirements-web.txt` for dashboard installs
+- GitHub Actions CI workflow on push/PR to master and main
+
+### Changed
+
+- `requirements.txt` is CLI/core only (fastapi/uvicorn no longer pulled in by default)
+- Docker/release install paths use `requirements-web.txt` where the web UI is needed
+- Dockerfile host/port configurable via `WEB_HOST` / `WEB_PORT` (compose still publishes loopback only)
+
+### Fixed
+
+- Removed unused `HTTP_LOG` global from `const.py`
+- Stop tracking gitignored `novels.txt` queue file
+
 ## [2.6.0] - 2026-07-11
 
 ### Added
