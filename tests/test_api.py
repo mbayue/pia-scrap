@@ -1,4 +1,5 @@
 import json
+from typing import cast
 
 import requests
 
@@ -6,14 +7,17 @@ from src.api import (
     AD_REWARD_WAIT_SECONDS,
     AdRewardRequired,
     ApiShapeError,
+    BlockKind,
     KnownApiBlockError,
     NovelpiaClient,
     PremiumEpisodeBlocked,
     detect_ad_reward_required,
     detect_premium_episode_blocked,
+    format_block_label,
+    parse_block_label,
     request_with_retries,
 )
-from src.contracts import BlockKind, ChapterResult, EpisodeItem, format_block_label, parse_block_label
+from src.contracts import ChapterResult, EpisodeItem
 
 
 class FakeResponse:
@@ -35,7 +39,7 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(self.reason, response=self)
+            raise requests.HTTPError(self.reason, response=cast(requests.Response, self))
 
 
 class FakeSession:
@@ -398,7 +402,7 @@ def test_episode_content_makes_single_plain_request(monkeypatch):
 
     client = NovelpiaClient(throttle=0)
     client.tokens.tkey = "auth-token"
-    monkeypatch.setattr("src.api.request_with_retries", fake_request_with_retries)
+    monkeypatch.setattr("src.api.client.request_with_retries", fake_request_with_retries)
 
     response = client.episode_content("token")
 
@@ -695,8 +699,7 @@ def test_fetch_episode_returns_error_on_html_normalization_failure(monkeypatch):
     def fail_normalize(_html):
         raise RuntimeError("bad html")
 
-    monkeypatch.setattr("src.html_norm.html_from_episode_text", fail_normalize)
-    monkeypatch.setattr("src.api.html_from_episode_text", fail_normalize)
+    monkeypatch.setattr("src.api.client.html_from_episode_text", fail_normalize)
 
     result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)
 

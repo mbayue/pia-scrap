@@ -20,11 +20,15 @@ logger = get_logger(__name__)
 # ----------------------------
 
 
-def extract_genre_names(novel: dict[str, Any]) -> list[str]:
+def extract_genre_names(novel: Mapping[str, Any]) -> list[str]:
     """Extract unique genre/tag names from a NovelResponse."""
     result = novel.get("result", {})
-    nv = result.get("novel", {})
-    tag_items = result.get("tag_list") or nv.get("tag_list") or []
+    nv = result.get("novel", {}) if isinstance(result, Mapping) else {}
+    tag_items = (
+        (result.get("tag_list") if isinstance(result, Mapping) else None)
+        or (nv.get("tag_list") if isinstance(nv, Mapping) else None)
+        or []
+    )
     names: list[str] = []
     for tag in tag_items:
         if isinstance(tag, str):

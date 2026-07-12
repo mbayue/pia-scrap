@@ -3,16 +3,25 @@ import unittest
 from http.cookiejar import Cookie, MozillaCookieJar
 from pathlib import Path
 
+import pytest
+
 from src.const import config_path_for_runtime
 from src.helper import (
     attach_auth_cookies,
+    cookie_auth_from_jar,
     extract_genre_names,
     extract_t_token,
+    get_cookie_value,
     is_placeholder_userkey,
     j,
     kebab,
     load_config,
+    load_netscape_cookies_text,
+    looks_like_jwt,
     mask_kv,
+    media_type_from_ext,
+    merge_login_at,
+    normalize_auth_config,
     normalize_description,
     normalize_url,
     sanitize_filename,
@@ -212,3 +221,136 @@ def test_extract_genre_names_deduplicates():
 def test_extract_genre_names_handles_string_tags():
     novel = {"result": {"novel": {"tag_list": ["A", "B"]}}}
     assert extract_genre_names(novel) == ["A", "B"]
+
+
+def test_media_type_from_ext_matrix():
+    assert media_type_from_ext(".jpg") == "image/jpeg"
+    assert media_type_from_ext(".jpeg") == "image/jpeg"
+    assert media_type_from_ext(".png") == "image/png"
+    assert media_type_from_ext(".gif") == "image/gif"
+    assert media_type_from_ext(".webp") == "image/webp"
+    assert media_type_from_ext(".bin") == "image/jpeg"
+
+
+def test_looks_like_jwt_invalid_branches():
+    assert looks_like_jwt(None) is False
+    assert looks_like_jwt("not.jwt") is False
+    assert looks_like_jwt("😀.😀.😀") is False
+
+
+def test_auth_config_and_login_header_helpers():
+    assert normalize_auth_config({"login_at": " a ", "userkey": None, "tkey": 1}) == {
+        "login_at": "a",
+        "userkey": "",
+        "tkey": "",
+    }
+    assert merge_login_at({"x": "1"}, "token") == {"x": "1", "login-at": "token"}
+    assert merge_login_at({"x": "1"}, None) == {"x": "1"}
+
+
+def test_load_config_normalizes_non_object_root(monkeypatch, tmp_path):
+    config_path = tmp_path / ".api.json"
+    config_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr("src.helper.CONFIG_PATH", str(config_path))
+
+    assert load_config() == {"login_at": "", "userkey": "", "tkey": ""}
+
+
+def test_save_config_cleans_temp_file_on_oserror(monkeypatch, tmp_path):
+    config_path = tmp_path / ".api.json"
+    monkeypatch.setattr("src.helper.CONFIG_PATH", str(config_path))
+    monkeypatch.setattr("src.helper.os.replace", lambda *_args: (_ for _ in ()).throw(OSError("boom")))
+
+    save_config({"login_at": "token"})
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_netscape_cookie_load_text_round_trip():
+    text = "\n".join(
+        [
+            "# Netscape HTTP Cookie File",
+            ".novelpia.com\tTRUE\t/\tFALSE\t0\tUSERKEY\tuser",
+            ".novelpia.com\tTRUE\t/\tFALSE\t0\tTKEY\ttoken",
+            "",
+        ]
+    )
+
+    jar = load_netscape_cookies_text(text)
+
+    auth = cookie_auth_from_jar(jar, login_at_fallback="login")
+    assert get_cookie_value(jar, "userkey") == "user"
+    assert auth.login_at == "login"
+    assert auth.userkey == "user"
+    assert auth.tkey == "token"
+
+
+def test_cookie_helpers_handle_missing_or_bad_cookiejar():
+    class NoCookies:
+        pass
+
+    class BadCookies:
+        def __iter__(self):
+            raise TypeError("bad")
+
+    assert attach_auth_cookies(NoCookies(), {"x": "1"}) == {"x": "1"}
+    assert attach_auth_cookies(NoCookies(), None) is None
+    assert get_cookie_value(BadCookies(), "USERKEY") is None
+
+
+def test_extract_t_token_ignores_non_content_urls():
+    assert extract_t_token({"result": {"url": "https://example.com/?_t=wrong"}}) is None
+
+
+def test_remaining_helper_edges(monkeypatch, tmp_path):
+    assert normalize_url("") == ""
+    assert normalize_url("https://x/img.jpg") == "https://x/img.jpg"
+    assert media_type_from_ext(".JPG") == "image/jpeg"
+
+    long_jwt = "a" * 8 + "." + "b" * 8 + "." + "c" * 8
+    masked = mask_kv({"safe": long_jwt, "long": "x" * 65})
+    assert masked == {"safe": "aaaaaa...cccccc", "long": "x" * 32 + "…(trunc)"}
+
+    assert j({1, 2}) == "{1, 2}"
+
+    config_path = tmp_path / ".api.json"
+    monkeypatch.setattr("src.helper.CONFIG_PATH", str(config_path))
+    monkeypatch.setattr("src.helper.os.chmod", lambda *_args: (_ for _ in ()).throw(OSError("chmod")))
+    save_config({"login_at": "token"})
+    assert load_config()["login_at"] == "token"
+
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text(
+        "\n".join(["# Netscape HTTP Cookie File", ".novelpia.com\tTRUE\t/\tFALSE\t0\tUSERKEY\tuser", ""]),
+        encoding="utf-8",
+    )
+    from src.helper import load_netscape_cookies
+
+    assert get_cookie_value(load_netscape_cookies(str(cookie_path)), "USERKEY") == "user"
+
+    class UnlinkBoom:
+        def __enter__(self):
+            self.name = str(tmp_path / "missing-cookie-file")
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def write(self, _text):
+            pass
+
+    monkeypatch.setattr("src.helper.tempfile.NamedTemporaryFile", lambda *_args, **_kwargs: UnlinkBoom())
+    monkeypatch.setattr("src.helper.os.unlink", lambda *_args: (_ for _ in ()).throw(OSError("unlink")))
+    with pytest.raises(FileNotFoundError):
+        load_netscape_cookies_text("bad")
+
+    assert list(__import__("src.helper", fromlist=["iter_strings"]).iter_strings({"a": ["x", {"b": "y"}]})) == [
+        "x",
+        "y",
+    ]
+    assert (
+        extract_t_token(
+            {"result": {"deep": {"url": "https://api-global.novelpia.com/v1/novel/episode/content?_t=bad.bad.bad"}}}
+        )
+        == "bad.bad.bad"
+    )

@@ -8,8 +8,8 @@ from typing import Protocol
 
 from tqdm import tqdm
 
-from src.api import AdRewardRequired, KnownApiBlockError, PremiumEpisodeBlocked
-from src.contracts import BlockKind, ChapterResult, EpisodeItem, FailedChapter, chapter_is_error, parse_block_label
+from src.api import AdRewardRequired, BlockKind, KnownApiBlockError, PremiumEpisodeBlocked, parse_block_label
+from src.contracts import ChapterResult, EpisodeItem, FailedChapter, chapter_is_error
 from src.helper import ensure_dir
 from src.logutil import get_logger
 
@@ -251,6 +251,30 @@ def _handle_fetched_result(
     return False
 
 
+def _commit_ordered_free_results(
+    ep_list: list[EpisodeItem],
+    book_dir: str,
+    results_by_pos: dict[int, ChapterResult],
+    raw_by_pos: dict[int, ChapterResult | None],
+) -> tuple[list[ChapterResult], list[FailedChapter]]:
+    """Commit free-policy results in list order; stop before first premium block."""
+    results: list[ChapterResult] = []
+    failed_rows: list[FailedChapter] = []
+    for pos, ep in enumerate(ep_list, 1):
+        if pos in results_by_pos and pos not in raw_by_pos:
+            results.append(results_by_pos[pos])
+            continue
+        if pos not in raw_by_pos:
+            continue
+        res = raw_by_pos[pos]
+        if res is None:
+            logger.info(f"[info] stopped at premium chapter: episode_no={episode_no(ep)}")
+            break
+        if _handle_fetched_result(res, ep, pos, book_dir, results, failed_rows):
+            break
+    return results, failed_rows
+
+
 def _try_ad_reward_fetch(
     client: ChapterFetchClient,
     ep: EpisodeItem,
@@ -486,28 +510,7 @@ def _fetch_with_account_policy_parallel(
             logger.info("[info] all requested chapters loaded from cache")
 
     # Ordered commit: stop at first premium; never include post-premium results.
-    results: list[ChapterResult] = []
-    failed_rows: list[FailedChapter] = []
-    for pos, ep in enumerate(ep_list, 1):
-        if pos in results_by_pos and pos not in {p for p, _ in fetch_items}:
-            results.append(results_by_pos[pos])
-            continue
-        if pos not in raw_by_pos:
-            continue
-        res = raw_by_pos[pos]
-        if res is None:
-            # Premium during ad unlock at this position.
-            logger.info(f"[info] stopped at premium chapter: episode_no={episode_no(ep)}")
-            break
-        block = known_block_from_result(res)
-        if block is not None and block[0] == "premium episode blocked":
-            logger.info(f"[info] stopped at premium chapter: episode_no={block[2]}")
-            break
-        results.append(res)
-        if not res or chapter_is_error(res):
-            failed_rows.append(normalize_failed_chapter(ep, res or {}, pos))
-        elif (cache_row := normalize_cache_row(ep, res, pos)) is not None:
-            write_cache_item(book_dir, cache_row)
+    results, failed_rows = _commit_ordered_free_results(ep_list, book_dir, results_by_pos, raw_by_pos)
 
     _emit_cache_hit_rate(cache_hits, fetched_count)
     _finalize_failed_rows(book_dir, failed_rows, write_when_fetched=bool(fetched_count))
