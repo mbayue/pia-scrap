@@ -143,6 +143,7 @@ def load_config() -> AuthConfig:
                 if isinstance(raw, dict):
                     return normalize_auth_config({str(k): v for k, v in raw.items()})
                 logger.error("Error occurred while loading config: config root is not an object")
+                return normalize_auth_config({})
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         logger.error(f"Error occurred while loading config: {e}")
         return {}

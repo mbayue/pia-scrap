@@ -105,8 +105,8 @@ def request_with_retries(
                         r, did_refresh, did_login = recovered
                         if r.status_code < 500:
                             return r
-                        # Recovered response is still a server error; fall through to
-                        # the same >=500 handling below (known-block detection,
+                        # Recovered response is still a server error; fall through
+                        # to the same >=500 handling below (known-block detection,
                         # retry/raise) instead of bypassing it.
                 recovered_response = _handle_server_error(r, attempt, max_retries, known_block_fn, debug=debug)
                 if recovered_response is not None:

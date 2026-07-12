@@ -78,7 +78,7 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _known_block_episode_numbers(body: Mapping[str, Any], code: str, errmsg: str) -> tuple[int, int] | None:
-    if body.get("code") != code and body.get("errmsg") != errmsg:
+    if body.get("code") != code or body.get("errmsg") != errmsg:
         return None
     result = body.get("result")
     if not isinstance(result, dict):

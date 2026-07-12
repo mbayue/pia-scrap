@@ -476,33 +476,46 @@ def _fetch_with_account_policy_parallel(
         )
         pbar = tqdm(total=len(fetch_items), desc="[info] fetching chapters", unit="chap")
         raw_by_pos: dict[int, ChapterResult | None] = {}
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        future_to_pos: dict[concurrent.futures.Future, int] = {}
+        shutdown_done = False
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_pos = {
-                    executor.submit(
-                        _fetch_one_free_episode,
-                        client,
-                        ep,
-                        pos,
-                        prefer_ad_novel_no=None,
-                        on_ad_detected=_on_ad,
-                    ): pos
-                    for pos, ep in fetch_items
-                }
-                for future in concurrent.futures.as_completed(future_to_pos):
-                    pos = future_to_pos[future]
-                    try:
-                        raw_by_pos[pos] = future.result()
-                    except Exception as e:
-                        ep = next(ep for p, ep in fetch_items if p == pos)
-                        raw_by_pos[pos] = {
-                            "error": str(e),
-                            "epi_no": episode_no(ep),
-                            "epi_title": chapter_title(ep),
-                            "idx": pos,
-                        }
-                    pbar.update(1)
+            future_to_pos = {
+                executor.submit(
+                    _fetch_one_free_episode,
+                    client,
+                    ep,
+                    pos,
+                    prefer_ad_novel_no=None,
+                    on_ad_detected=_on_ad,
+                ): pos
+                for pos, ep in fetch_items
+            }
+            for future in concurrent.futures.as_completed(future_to_pos):
+                pos = future_to_pos[future]
+                try:
+                    raw_by_pos[pos] = future.result()
+                except Exception as e:
+                    ep = next(ep for p, ep in fetch_items if p == pos)
+                    raw_by_pos[pos] = {
+                        "error": str(e),
+                        "epi_no": episode_no(ep),
+                        "epi_title": chapter_title(ep),
+                        "idx": pos,
+                    }
+                pbar.update(1)
+        except KeyboardInterrupt:
+            for future in future_to_pos:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            shutdown_done = True
+            raise
+        else:
+            executor.shutdown(wait=True)
+            shutdown_done = True
         finally:
+            if not shutdown_done:
+                executor.shutdown(wait=False, cancel_futures=True)
             pbar.close()
     else:
         raw_by_pos = {}

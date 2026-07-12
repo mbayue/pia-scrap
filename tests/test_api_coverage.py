@@ -1,3 +1,5 @@
+from typing import cast
+
 import pytest
 import requests
 
@@ -40,7 +42,7 @@ class Response:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(self.reason, response=self)
+            raise requests.HTTPError(self.reason, response=cast(requests.Response, self))
 
 
 class Session:
@@ -71,9 +73,10 @@ def test_parse_edges_full_shapes():
             }
         )
     )
-    assert novel["result"]["writer_list"] == [{"writer_name": "W"}, {}]
-    assert novel["result"]["info"] == {"epi_cnt": 2}
-    assert novel["result"]["tag_list"] == ["B"]
+    result = novel["result"]
+    assert result.get("writer_list") == [{"writer_name": "W"}]
+    assert result.get("info") == {"epi_cnt": 2}
+    assert result.get("tag_list") == ["B"]
 
     episodes = parse_episode_list_response(
         Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": "1", "epi_num": "x"}]}})
@@ -88,8 +91,9 @@ def test_parse_edges_full_shapes():
             }
         )
     )
-    assert content["result"]["data"] == {"epi_content": "a"}
-    assert content["content"] == "top"
+    result = content["result"]
+    assert result.get("data") == {"epi_content": "a"}
+    assert content.get("content") == "top"
     assert collect_epi_content_parts({"epi_content2": "b", "epi_content": "a", "x": "z"}) == ["a", "b"]
 
 
@@ -210,9 +214,9 @@ def test_client_edges(monkeypatch):
         client.__dict__["s"] = Session([Response(200, {"result": {}})])
         client.ad_reward_token(AdRewardRequired(1, 2))
 
-    assert client.fetch_episode({"epi_num": 1}, 1)["error"] == "missing episode_no"
+    assert client.fetch_episode({"epi_num": 1}, 1).get("error") == "missing episode_no"
     monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: {"result": {}})
-    assert client.fetch_episode({"episode_no": 1, "epi_title": "T"}, 1)["error"] == "no token found"
+    assert client.fetch_episode({"episode_no": 1, "epi_title": "T"}, 1).get("error") == "no token found"
 
     monkeypatch.setattr(client, "episode_ticket", lambda _epi_no: (_ for _ in ()).throw(RuntimeError("boom?_t=secret")))
-    assert "_t=<redacted>" in client.fetch_episode({"episode_no": 1, "epi_title": "T"}, 1)["error"]
+    assert "_t=<redacted>" in client.fetch_episode({"episode_no": 1, "epi_title": "T"}, 1).get("error", "")

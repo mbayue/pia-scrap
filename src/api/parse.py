@@ -74,11 +74,10 @@ def parse_writers(writer_list: object) -> list[Writer]:
     for row in writer_list:
         if not isinstance(row, dict):
             continue
-        writer: Writer = {}
         writer_name = row.get("writer_name")
-        if isinstance(writer_name, str):
-            writer["writer_name"] = writer_name
-        writers.append(writer)
+        if not isinstance(writer_name, str):
+            continue
+        writers.append({"writer_name": writer_name})
     return writers
 
 
