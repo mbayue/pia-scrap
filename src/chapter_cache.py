@@ -310,17 +310,55 @@ def _fetch_one_free_episode(
     return res
 
 
-def _finalize_account_policy_failures(
+def _emit_cache_hit_rate(cache_hits: int, fetched_count: int) -> None:
+    total = cache_hits + fetched_count
+    if total > 0 and cache_hits > 0:
+        logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
+
+
+def _finalize_failed_rows(
     book_dir: str,
     failed_rows: list[FailedChapter],
-    fetched_count: int,
+    *,
+    write_when_fetched: bool,
 ) -> None:
+    """Write or clear failed_chapters.jsonl after a fetch run.
+
+    When ``write_when_fetched`` is False and there are no failures, leave any
+    existing file alone (paid path only rewrites after a real fetch attempt).
+    """
+    failure_path = failed_path(book_dir)
     if failed_rows:
-        failure_path = failed_path(book_dir)
         write_jsonl(failure_path, failed_rows)
         logger.warning(f"[warn] Wrote failed chapter list: {failure_path}")
-    elif fetched_count and os.path.exists(failure_path := failed_path(book_dir)):
+    elif write_when_fetched and os.path.exists(failure_path):
         os.remove(failure_path)
+
+
+def _partition_uncached_episodes(
+    ep_list: list[EpisodeItem],
+    cache: dict[int, ChapterResult],
+    forced_nos: set[int],
+    *,
+    one_based_pos: bool,
+) -> tuple[dict[int, ChapterResult], list[tuple[int, EpisodeItem]], int]:
+    """Split episodes into cache hits and items that still need fetching.
+
+    Returns (cache_results_by_pos, fetch_items as (pos, ep), cache_hit_count).
+    Positions are 1-based when ``one_based_pos`` else 0-based list indices.
+    """
+    results_by_pos: dict[int, ChapterResult] = {}
+    fetch_items: list[tuple[int, EpisodeItem]] = []
+    cache_hits = 0
+    for index, ep in enumerate(ep_list):
+        pos = index + 1 if one_based_pos else index
+        epi_no = episode_no(ep)
+        if epi_no is not None and epi_no in cache and epi_no not in forced_nos:
+            results_by_pos[pos] = {**cache[epi_no], "idx": index + 1}
+            cache_hits += 1
+        else:
+            fetch_items.append((pos, ep))
+    return results_by_pos, fetch_items, cache_hits
 
 
 def _fetch_with_account_policy_serial(
@@ -373,11 +411,8 @@ def _fetch_with_account_policy_serial(
     finally:
         pbar.close()
 
-    total = cache_hits + fetched_count
-    if total > 0 and cache_hits > 0:
-        logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
-
-    _finalize_account_policy_failures(book_dir, failed_rows, fetched_count)
+    _emit_cache_hit_rate(cache_hits, fetched_count)
+    _finalize_failed_rows(book_dir, failed_rows, write_when_fetched=bool(fetched_count))
     return results, fetched_count
 
 
@@ -395,17 +430,9 @@ def _fetch_with_account_policy_parallel(
     Workers may finish out of order. Results after the first premium chapter in
     list order are discarded so the built book matches the serial free path.
     """
-    results_by_pos: dict[int, ChapterResult] = {}
-    fetch_items: list[tuple[int, EpisodeItem]] = []
-    cache_hits = 0
-
-    for pos, ep in enumerate(ep_list, 1):
-        epi_no = episode_no(ep)
-        if epi_no is not None and epi_no in cache and epi_no not in forced_nos:
-            results_by_pos[pos] = {**cache[epi_no], "idx": pos}
-            cache_hits += 1
-        else:
-            fetch_items.append((pos, ep))
+    results_by_pos, fetch_items, cache_hits = _partition_uncached_episodes(
+        ep_list, cache, forced_nos, one_based_pos=True
+    )
 
     ad_info_lock = threading.Lock()
     ad_info_printed = False
@@ -482,11 +509,8 @@ def _fetch_with_account_policy_parallel(
         elif (cache_row := normalize_cache_row(ep, res, pos)) is not None:
             write_cache_item(book_dir, cache_row)
 
-    total = cache_hits + fetched_count
-    if total > 0 and cache_hits > 0:
-        logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
-
-    _finalize_account_policy_failures(book_dir, failed_rows, fetched_count)
+    _emit_cache_hit_rate(cache_hits, fetched_count)
+    _finalize_failed_rows(book_dir, failed_rows, write_when_fetched=bool(fetched_count))
     return results, fetched_count
 
 
@@ -533,19 +557,13 @@ def fetch_with_cache(
     cache = load_cache(book_dir) if use_cache else {}
     forced_nos = force_episode_nos or set()
     results: list[ChapterResult] = [{} for _ in ep_list]
-    fetch_items: list[EpisodeItem] = []
-    fetch_positions: list[int] = []
-    cache_hits = 0
-
-    for pos, ep in enumerate(ep_list):
-        epi_no = episode_no(ep)
-        if epi_no is not None and epi_no in cache and epi_no not in forced_nos:
-            results[pos] = {**cache[epi_no], "idx": pos + 1}
-            cache_hits += 1
-            continue
-        fetch_items.append(ep)
-        fetch_positions.append(pos)
-
+    cache_hits_map, fetch_pairs, cache_hits = _partition_uncached_episodes(
+        ep_list, cache, forced_nos, one_based_pos=False
+    )
+    for pos, row in cache_hits_map.items():
+        results[pos] = row
+    fetch_items = [ep for _, ep in fetch_pairs]
+    fetch_positions = [pos for pos, _ in fetch_pairs]
     fetched_position_set = set(fetch_positions)
 
     if fetch_items:
@@ -573,9 +591,7 @@ def fetch_with_cache(
     elif ep_list:
         logger.info("[info] all requested chapters loaded from cache")
 
-    total = cache_hits + len(fetch_items)
-    if total > 0 and cache_hits > 0:
-        logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
+    _emit_cache_hit_rate(cache_hits, len(fetch_items))
 
     failed_rows: list[FailedChapter] = []
     for pos, (ep, res) in enumerate(zip(ep_list, results, strict=False), 1):
@@ -591,11 +607,6 @@ def fetch_with_cache(
             write_cache_item(book_dir, cache_row)
 
     if fetch_items:
-        failure_path = failed_path(book_dir)
-        if failed_rows:
-            write_jsonl(failure_path, failed_rows)
-            logger.warning(f"[warn] Wrote failed chapter list: {failure_path}")
-        elif os.path.exists(failure_path):
-            os.remove(failure_path)
+        _finalize_failed_rows(book_dir, failed_rows, write_when_fetched=True)
 
     return results, len(fetch_items)
