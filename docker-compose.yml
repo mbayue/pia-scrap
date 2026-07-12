@@ -1,6 +1,8 @@
 services:
   pia-scrap:
     build: .
+    # Loopback-only publish: dashboard accepts cookies/credentials.
+    # To expose on LAN, change the left side carefully and put auth in front.
     ports:
       - "127.0.0.1:8000:8000"
     env_file:
@@ -10,4 +12,6 @@ services:
       - ./output:/app/output
     environment:
       - OUTPUT_RETENTION_DAYS=30
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=8000
     restart: unless-stopped
