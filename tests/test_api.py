@@ -695,6 +695,7 @@ def test_fetch_episode_returns_error_on_html_normalization_failure(monkeypatch):
     def fail_normalize(_html):
         raise RuntimeError("bad html")
 
+    monkeypatch.setattr("src.html_norm.html_from_episode_text", fail_normalize)
     monkeypatch.setattr("src.api.html_from_episode_text", fail_normalize)
 
     result = client.fetch_episode({"episode_no": 123, "epi_title": "Bad"}, idx=4)

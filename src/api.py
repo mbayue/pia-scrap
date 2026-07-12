@@ -38,8 +38,8 @@ from src.helper import (
     merge_login_at,
     save_config,
 )
+from src.html_norm import html_from_episode_text
 from src.logutil import get_logger
-from src.novel import html_from_episode_text
 
 logger = get_logger(__name__)
 
