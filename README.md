@@ -6,6 +6,13 @@ Create EPUB or TXT output from Novelpia novels using Novelpia’s API. Given one
 
 ---
 
+## What's New in 2.7.0
+
+* **Free-account workers**: `-w` / web workers now speed up free and unknown accounts (ad unlock per chapter; ordered premium stop).
+* **Leaner CLI install**: `requirements.txt` is core-only; use `requirements-web.txt` or `pip install -e ".[web]"` for the dashboard.
+* **CI on every PR**: lint + tests run on push/PR to master, not only on release tags.
+* **Cleanup**: removed dead `HTTP_LOG` flag; stopped tracking local `novels.txt` queues.
+
 ## What's New in 2.6.0
 
 * **Dark mode web dashboard**: toggle between light/dark themes, persisted in browser.
@@ -135,7 +142,7 @@ Arguments
 * `-lang` — EPUB language code (default `en`).
 * `-proxy` — HTTP/HTTPS/SOCKS proxy, e.g. `http://host:port` or `socks5h://host:port`.
 * `-t` — seconds to wait between episode requests (default `1.25`).
-* `-w` — parallel chapter fetch workers (default `1`). Increase to speed up fetching, but beware of hitting rate limits.
+* `-w` — parallel chapter fetch workers (default `1`). Works for **paid and free** accounts. Free/unknown accounts still run ad-unlock per chapter and stop at the first premium chapter in list order. Start with `2`–`4` on free accounts to reduce rate-limit risk.
 * `-up` — reuse per-chapter JSON files in `.cache/` to fetch only chapters missing from cache.
 * `-r` — retry chapters that failed to fetch.
 * `-v` — verbose request logs.
@@ -212,6 +219,8 @@ python -m uvicorn web_app:app --reload
 Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, and start a background EPUB job. The web UI is EPUB-only, polls progress, shows logs, keeps recent jobs in the browser, and auto-downloads finished EPUB files once per job.
 
 The dashboard is designed for local use on `127.0.0.1`. It accepts credentials and full cookie exports, so do not expose it directly on a public interface. If you deploy it beyond localhost, put it behind your own HTTPS/auth reverse proxy and treat `.env`, `.api.json`, and cookie text as secrets.
+
+Docker Compose publishes the dashboard on **loopback only** (`127.0.0.1:8000`). Inside the container uvicorn still listens on `0.0.0.0` so port mapping works; do not change the host bind to `0.0.0.0:8000` unless you add your own auth layer.
 
 Authentication is optional for public content. For ad-gated chapters, premium content, or chapter images, open **Authentication** and paste a full Netscape cookie export from your browser. Image hosts may require CloudFront cookies (`CloudFront-Key-Pair-Id`, `CloudFront-Policy`, `CloudFront-Signature`).
 
