@@ -73,7 +73,7 @@ def test_parse_edges_full_shapes():
             }
         )
     )
-    result = novel["result"]
+    result = novel.get("result", {})
     assert result.get("writer_list") == [{"writer_name": "W"}]
     assert result.get("info") == {"epi_cnt": 2}
     assert result.get("tag_list") == ["B"]
@@ -91,7 +91,7 @@ def test_parse_edges_full_shapes():
             }
         )
     )
-    result = content["result"]
+    result = content.get("result", {})
     assert result.get("data") == {"epi_content": "a"}
     assert content.get("content") == "top"
     assert collect_epi_content_parts({"epi_content2": "b", "epi_content": "a", "x": "z"}) == ["a", "b"]
