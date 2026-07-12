@@ -711,6 +711,191 @@ def test_fetch_chapters_free_policy_treats_malformed_block_as_normal_failure(tmp
     assert client.calls == [([episodes[0]], 1, None), ([episodes[1]], 1, None)]
 
 
+class MapFetchClient:
+    """Thread-safe client keyed by episode_no for free parallel-path tests."""
+
+    def __init__(
+        self,
+        first_fetch: dict[int, ChapterResult],
+        after_ad: dict[int, ChapterResult] | None = None,
+        premium_on_probe: set[int] | None = None,
+    ):
+        import threading
+
+        self.first_fetch = first_fetch
+        self.after_ad = after_ad or {}
+        self.premium_on_probe = premium_on_probe or set()
+        self.lock = threading.Lock()
+        self.fetch_calls: list[tuple[int, object]] = []
+        self.probe_calls: list[int] = []
+        self.s = __import__("requests").Session()
+        self.timeout = 30
+
+    def fetch_episodes_parallel(
+        self,
+        ep_list: list[EpisodeItem],
+        max_workers: int = 1,
+        progress_cb=None,
+        on_result=None,
+    ) -> list[ChapterResult]:
+        raise AssertionError("paid parallel path should not be used for free policy tests")
+
+    def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
+        epi = int(ep["episode_no"])  # type: ignore[arg-type]
+        with self.lock:
+            self.fetch_calls.append((epi, ticket_data))
+        if ticket_data is not None:
+            row = self.after_ad.get(epi)
+            if row is None:
+                return {
+                    "error": "missing after-ad fixture",
+                    "epi_no": epi,
+                    "epi_title": ep.get("epi_title"),
+                    "idx": idx,
+                }
+            return {**row, "idx": idx}
+        row = self.first_fetch[epi]
+        return {**row, "idx": idx}
+
+    def probe_ad_reward_unlock(self, reward: AdRewardRequired) -> dict[str, str]:
+        with self.lock:
+            self.probe_calls.append(reward.episode_no)
+        if reward.episode_no in self.premium_on_probe:
+            raise KnownApiBlockError(PremiumEpisodeBlocked(novel_no=reward.novel_no, episode_no=reward.episode_no))
+        return {"ticket": str(reward.episode_no)}
+
+
+def test_fetch_chapters_free_policy_workers_unlock_ads_and_stop_at_premium(tmp_path):
+    book_dir = tmp_path / "book"
+    premium = {
+        "error": "premium episode blocked: novel_no=7 episode_no=42",
+        "epi_no": 42,
+        "epi_title": "Premium",
+    }
+    client = MapFetchClient(
+        first_fetch={
+            40: {"epi_no": 40, "html": "one", "epi_title": "One"},
+            41: {
+                "error": "ad reward required: novel_no=7 episode_no=41",
+                "epi_no": 41,
+                "epi_title": "Ad",
+            },
+            42: premium,
+            43: {"epi_no": 43, "html": "later-should-drop", "epi_title": "Later"},
+        },
+        after_ad={
+            41: {"epi_no": 41, "html": "ad", "epi_title": "Ad"},
+            42: premium,
+        },
+    )
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 40, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 41, "epi_num": 2, "epi_title": "Ad"},
+        {"episode_no": 42, "epi_num": 3, "epi_title": "Premium"},
+        {"episode_no": 43, "epi_num": 4, "epi_title": "Later"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE, max_workers=3),
+    )
+
+    assert fetched_count == 4  # all uncached may be attempted in parallel
+    assert [row.get("html") for row in results] == ["one", "ad"]
+    assert not (book_dir / "failed_chapters.jsonl").exists()
+    assert 41 in client.probe_calls
+    # Post-premium success must not be committed to cache.
+    assert not (book_dir / ".cache" / "43.json").exists()
+    assert (book_dir / ".cache" / "40.json").exists()
+    assert (book_dir / ".cache" / "41.json").exists()
+
+
+def test_fetch_chapters_free_policy_workers_match_serial_chapter_set(tmp_path):
+    """Parallel free path should keep the same committed chapters as serial."""
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 40, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 41, "epi_num": 2, "epi_title": "Ad"},
+        {"episode_no": 42, "epi_num": 3, "epi_title": "Premium"},
+        {"episode_no": 43, "epi_num": 4, "epi_title": "Later"},
+    ]
+
+    def _client() -> MapFetchClient:
+        premium = {
+            "error": "premium episode blocked: novel_no=7 episode_no=42",
+            "epi_no": 42,
+            "epi_title": "Premium",
+        }
+        return MapFetchClient(
+            first_fetch={
+                40: {"epi_no": 40, "html": "one", "epi_title": "One"},
+                41: {
+                    "error": "ad reward required: novel_no=7 episode_no=41",
+                    "epi_no": 41,
+                    "epi_title": "Ad",
+                },
+                42: premium,
+                43: {"epi_no": 43, "html": "later", "epi_title": "Later"},
+            },
+            after_ad={
+                41: {"epi_no": 41, "html": "ad", "epi_title": "Ad"},
+                42: premium,
+            },
+        )
+
+    serial, _ = fetch_chapters(
+        _client(),
+        str(tmp_path / "serial"),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE, max_workers=1),
+    )
+    parallel, _ = fetch_chapters(
+        _client(),
+        str(tmp_path / "parallel"),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE, max_workers=3),
+    )
+
+    assert [r.get("html") for r in serial] == [r.get("html") for r in parallel] == ["one", "ad"]
+
+
+def test_fetch_chapters_free_policy_workers_use_cache_hits(tmp_path):
+    book_dir = tmp_path / "book"
+    book_dir.mkdir()
+    cache_dir = book_dir / ".cache"
+    cache_dir.mkdir()
+    (cache_dir / "40.json").write_text(
+        json.dumps({"idx": 1, "epi_no": 40, "epi_title": "One", "html": "cached"}),
+        encoding="utf-8",
+    )
+    client = MapFetchClient(
+        first_fetch={
+            41: {
+                "error": "ad reward required: novel_no=7 episode_no=41",
+                "epi_no": 41,
+                "epi_title": "Ad",
+            },
+        },
+        after_ad={41: {"epi_no": 41, "html": "ad", "epi_title": "Ad"}},
+    )
+    episodes: list[EpisodeItem] = [
+        {"episode_no": 40, "epi_num": 1, "epi_title": "One"},
+        {"episode_no": 41, "epi_num": 2, "epi_title": "Ad"},
+    ]
+
+    results, fetched_count = fetch_chapters(
+        client,
+        str(book_dir),
+        episodes,
+        ChapterFetchMode(account_policy=AccountChapterPolicy.FREE, max_workers=2, update=True),
+    )
+
+    assert fetched_count == 1
+    assert [row.get("html") for row in results] == ["cached", "ad"]
+    assert all(epi != 40 for epi, _ in client.fetch_calls)
+
+
 def test_build_txt_uses_paid_account_status_for_parallel_fetch_without_reward(tmp_path):
     client = BuilderClient(
         {"statusCode": "200", "result": {"login": {"mem_nick": "Paid", "mem_plus_type": "1"}}},

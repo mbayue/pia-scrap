@@ -118,6 +118,7 @@ def fetch_chapters(
                 book_dir,
                 use_cache=plan.use_cache,
                 force_episode_nos=plan.retry_episode_nos,
+                max_workers=plan.max_workers,
             )
         case unreachable:
             assert_never(unreachable)

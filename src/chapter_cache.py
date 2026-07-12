@@ -1,6 +1,8 @@
+import concurrent.futures
 import json
 import os
 import re
+import threading
 from collections.abc import Callable, Iterable, Mapping
 from typing import Protocol
 
@@ -255,13 +257,10 @@ def _try_ad_reward_fetch(
     pos: int,
     ad_novel_no: int,
     epi_no: int,
-    book_dir: str,
-    results: list[ChapterResult],
-    failed_rows: list[FailedChapter],
 ) -> tuple[ChapterResult | None, bool]:
     """Try ad-reward unlock and fetch. Returns (result, should_break).
 
-    should_break is True when a premium block is detected.
+    should_break is True when a premium block is detected during unlock.
     """
     try:
         ticket_data = client.probe_ad_reward_unlock(AdRewardRequired(novel_no=ad_novel_no, episode_no=epi_no))
@@ -276,22 +275,76 @@ def _try_ad_reward_fetch(
     return res, False
 
 
-def fetch_with_account_policy(
+def _fetch_one_free_episode(
+    client: ChapterFetchClient,
+    ep: EpisodeItem,
+    pos: int,
+    *,
+    prefer_ad_novel_no: int | None = None,
+    on_ad_detected: Callable[[int], None] | None = None,
+) -> ChapterResult | None:
+    """Fetch a single free-account episode (normal ticket, then ad unlock if needed).
+
+    Returns a ChapterResult, or None when unlock hits premium (caller should stop).
+    When ``prefer_ad_novel_no`` is set (serial sticky mode), skip the normal ticket
+    and go straight to ad unlock for that novel.
+    """
+    epi_no = episode_no(ep)
+    if prefer_ad_novel_no is not None and epi_no is not None:
+        res, should_break = _try_ad_reward_fetch(client, ep, pos, prefer_ad_novel_no, epi_no)
+        if should_break:
+            return None
+        return res
+
+    res = client.fetch_episode(ep, pos)
+    block = known_block_from_result(res)
+    if block is not None and block[0] == "premium episode blocked":
+        return res
+    if block is not None and block[0] == "ad reward required":
+        if on_ad_detected is not None:
+            on_ad_detected(block[1])
+        res, should_break = _try_ad_reward_fetch(client, ep, pos, block[1], block[2])
+        if should_break:
+            return None
+        return res
+    return res
+
+
+def _finalize_account_policy_failures(
+    book_dir: str,
+    failed_rows: list[FailedChapter],
+    fetched_count: int,
+) -> None:
+    if failed_rows:
+        failure_path = failed_path(book_dir)
+        write_jsonl(failure_path, failed_rows)
+        logger.warning(f"[warn] Wrote failed chapter list: {failure_path}")
+    elif fetched_count and os.path.exists(failure_path := failed_path(book_dir)):
+        os.remove(failure_path)
+
+
+def _fetch_with_account_policy_serial(
     client: ChapterFetchClient,
     ep_list: list[EpisodeItem],
     book_dir: str,
     *,
-    use_cache: bool = False,
-    force_episode_nos: set[int] | None = None,
+    cache: dict[int, ChapterResult],
+    forced_nos: set[int],
 ) -> tuple[list[ChapterResult], int]:
-    cache = load_cache(book_dir) if use_cache else {}
-    forced_nos = force_episode_nos or set()
+    """Serial free/unknown path with sticky ad mode (legacy order-preserving behavior)."""
     results: list[ChapterResult] = []
     failed_rows: list[FailedChapter] = []
     fetched_count = 0
     cache_hits = 0
     ad_novel_no: int | None = None
     ad_info_printed = False
+
+    def _on_ad(novel_no: int) -> None:
+        nonlocal ad_novel_no, ad_info_printed
+        ad_novel_no = novel_no
+        if not ad_info_printed:
+            logger.info("[info] ad-gated chapters detected; using rewarded access for later free chapters")
+            ad_info_printed = True
 
     pbar = tqdm(total=len(ep_list), desc="[info] fetching chapters", unit="chap")
     try:
@@ -303,49 +356,17 @@ def fetch_with_account_policy(
                 pbar.update(1)
                 continue
 
-            if epi_no is not None and ad_novel_no is not None:
-                fetched_count += 1
-                res, should_break = _try_ad_reward_fetch(
-                    client,
-                    ep,
-                    pos,
-                    ad_novel_no,
-                    epi_no,
-                    book_dir,
-                    results,
-                    failed_rows,
-                )
-                if should_break:
-                    break
-                if _handle_fetched_result(res, ep, pos, book_dir, results, failed_rows):
-                    break
-                pbar.update(1)
-                continue
-
             fetched_count += 1
-            res = client.fetch_episode(ep, pos)
-            block = known_block_from_result(res)
-            if block is not None and block[0] == "premium episode blocked":
-                logger.info(f"[info] stopped at premium chapter: episode_no={block[2]}")
+            res = _fetch_one_free_episode(
+                client,
+                ep,
+                pos,
+                prefer_ad_novel_no=ad_novel_no if epi_no is not None else None,
+                on_ad_detected=_on_ad,
+            )
+            if res is None:
+                # Premium during ad unlock — stop without including the chapter.
                 break
-            if block is not None and block[0] == "ad reward required":
-                ad_novel_no = block[1]
-                if not ad_info_printed:
-                    logger.info("[info] ad-gated chapters detected; using rewarded access for later free chapters")
-                    ad_info_printed = True
-                res, should_break = _try_ad_reward_fetch(
-                    client,
-                    ep,
-                    pos,
-                    block[1],
-                    block[2],
-                    book_dir,
-                    results,
-                    failed_rows,
-                )
-                if should_break:
-                    break
-
             if _handle_fetched_result(res, ep, pos, book_dir, results, failed_rows):
                 break
             pbar.update(1)
@@ -356,14 +377,147 @@ def fetch_with_account_policy(
     if total > 0 and cache_hits > 0:
         logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
 
-    if failed_rows:
-        failure_path = failed_path(book_dir)
-        write_jsonl(failure_path, failed_rows)
-        logger.warning(f"[warn] Wrote failed chapter list: {failure_path}")
-    elif fetched_count and os.path.exists(failure_path := failed_path(book_dir)):
-        os.remove(failure_path)
-
+    _finalize_account_policy_failures(book_dir, failed_rows, fetched_count)
     return results, fetched_count
+
+
+def _fetch_with_account_policy_parallel(
+    client: ChapterFetchClient,
+    ep_list: list[EpisodeItem],
+    book_dir: str,
+    *,
+    cache: dict[int, ChapterResult],
+    forced_nos: set[int],
+    max_workers: int,
+) -> tuple[list[ChapterResult], int]:
+    """Parallel free/unknown fetch with ordered premium stop.
+
+    Workers may finish out of order. Results after the first premium chapter in
+    list order are discarded so the built book matches the serial free path.
+    """
+    results_by_pos: dict[int, ChapterResult] = {}
+    fetch_items: list[tuple[int, EpisodeItem]] = []
+    cache_hits = 0
+
+    for pos, ep in enumerate(ep_list, 1):
+        epi_no = episode_no(ep)
+        if epi_no is not None and epi_no in cache and epi_no not in forced_nos:
+            results_by_pos[pos] = {**cache[epi_no], "idx": pos}
+            cache_hits += 1
+        else:
+            fetch_items.append((pos, ep))
+
+    ad_info_lock = threading.Lock()
+    ad_info_printed = False
+
+    def _on_ad(_novel_no: int) -> None:
+        nonlocal ad_info_printed
+        with ad_info_lock:
+            if not ad_info_printed:
+                logger.info("[info] ad-gated chapters detected; using rewarded access for later free chapters")
+                ad_info_printed = True
+
+    fetched_count = len(fetch_items)
+    if fetch_items:
+        logger.info(
+            f"[info] free account: using {max_workers} workers "
+            f"(ad unlock runs per chapter; premium still stops in list order)"
+        )
+        pbar = tqdm(total=len(fetch_items), desc="[info] fetching chapters", unit="chap")
+        raw_by_pos: dict[int, ChapterResult | None] = {}
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_pos = {
+                    executor.submit(
+                        _fetch_one_free_episode,
+                        client,
+                        ep,
+                        pos,
+                        prefer_ad_novel_no=None,
+                        on_ad_detected=_on_ad,
+                    ): pos
+                    for pos, ep in fetch_items
+                }
+                for future in concurrent.futures.as_completed(future_to_pos):
+                    pos = future_to_pos[future]
+                    try:
+                        raw_by_pos[pos] = future.result()
+                    except Exception as e:
+                        ep = next(ep for p, ep in fetch_items if p == pos)
+                        raw_by_pos[pos] = {
+                            "error": str(e),
+                            "epi_no": episode_no(ep),
+                            "epi_title": chapter_title(ep),
+                            "idx": pos,
+                        }
+                    pbar.update(1)
+        finally:
+            pbar.close()
+    else:
+        raw_by_pos = {}
+        if ep_list:
+            logger.info("[info] all requested chapters loaded from cache")
+
+    # Ordered commit: stop at first premium; never include post-premium results.
+    results: list[ChapterResult] = []
+    failed_rows: list[FailedChapter] = []
+    for pos, ep in enumerate(ep_list, 1):
+        if pos in results_by_pos and pos not in {p for p, _ in fetch_items}:
+            results.append(results_by_pos[pos])
+            continue
+        if pos not in raw_by_pos:
+            continue
+        res = raw_by_pos[pos]
+        if res is None:
+            # Premium during ad unlock at this position.
+            logger.info(f"[info] stopped at premium chapter: episode_no={episode_no(ep)}")
+            break
+        block = known_block_from_result(res)
+        if block is not None and block[0] == "premium episode blocked":
+            logger.info(f"[info] stopped at premium chapter: episode_no={block[2]}")
+            break
+        results.append(res)
+        if not res or chapter_is_error(res):
+            failed_rows.append(normalize_failed_chapter(ep, res or {}, pos))
+        elif (cache_row := normalize_cache_row(ep, res, pos)) is not None:
+            write_cache_item(book_dir, cache_row)
+
+    total = cache_hits + fetched_count
+    if total > 0 and cache_hits > 0:
+        logger.info(f"[perf] Cache hit rate: {cache_hits}/{total} ({cache_hits * 100 // total}%)")
+
+    _finalize_account_policy_failures(book_dir, failed_rows, fetched_count)
+    return results, fetched_count
+
+
+def fetch_with_account_policy(
+    client: ChapterFetchClient,
+    ep_list: list[EpisodeItem],
+    book_dir: str,
+    *,
+    use_cache: bool = False,
+    force_episode_nos: set[int] | None = None,
+    max_workers: int = 1,
+) -> tuple[list[ChapterResult], int]:
+    cache = load_cache(book_dir) if use_cache else {}
+    forced_nos = force_episode_nos or set()
+    workers = max(1, int(max_workers or 1))
+    if workers == 1:
+        return _fetch_with_account_policy_serial(
+            client,
+            ep_list,
+            book_dir,
+            cache=cache,
+            forced_nos=forced_nos,
+        )
+    return _fetch_with_account_policy_parallel(
+        client,
+        ep_list,
+        book_dir,
+        cache=cache,
+        forced_nos=forced_nos,
+        max_workers=workers,
+    )
 
 
 def fetch_with_cache(
