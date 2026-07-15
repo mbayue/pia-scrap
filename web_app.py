@@ -4,7 +4,6 @@ import threading
 try:
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import FileResponse, HTMLResponse
-    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError as e:
     raise SystemExit("Web dependencies not installed. Run: pip install -e '.[web]'") from e

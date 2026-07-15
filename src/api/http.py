@@ -60,7 +60,15 @@ def request_with_retries(
 
             r = cast(
                 ResponseLike,
-                session.request(method, url, headers=request_headers, params=params, json=json, data=data, timeout=timeout),
+                session.request(
+                    method,
+                    url,
+                    headers=request_headers,
+                    params=params,
+                    json=json,
+                    data=data,
+                    timeout=timeout,
+                ),
             )
 
             # Novelpia surfaces an expired/invalid session token as HTTP 500 with a
@@ -326,6 +334,14 @@ def _try_auth_recovery(
         logger.error(f"Error occurred while attaching auth cookies: {e}")
     new_response = cast(
         ResponseLike,
-        session.request(method, url, headers=retry_headers, params=params, json=json, data=data, timeout=timeout),
+        session.request(
+            method,
+            url,
+            headers=retry_headers,
+            params=params,
+            json=json,
+            data=data,
+            timeout=timeout,
+        ),
     )
     return new_response, did_refresh, did_login

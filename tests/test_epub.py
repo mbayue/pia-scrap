@@ -1,4 +1,5 @@
 import hashlib
+
 import requests
 
 from src.api import NovelpiaClient
@@ -228,7 +229,8 @@ def test_epub_image_adapter_rewrites_and_caches_image_when_fetch_succeeds(monkey
     assert len(items) == 1
     assert items[0].file_name == "images/img_00001.png"
     assert items[0].content == b"image-bytes"
-    assert (cache_dir / f"{hashlib.sha256(b'https://global.novelpia.com/cover.png').hexdigest()}.png").read_bytes() == b"image-bytes"
+    expected_path = cache_dir / f"{hashlib.sha256(b'https://global.novelpia.com/cover.png').hexdigest()}.png"
+    assert expected_path.read_bytes() == b"image-bytes"
 
 
 def test_epub_image_adapter_uses_cached_image_without_signed_key(monkeypatch, tmp_path):
