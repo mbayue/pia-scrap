@@ -2,7 +2,7 @@ from typing import TypedDict
 
 
 class NovelMeta(TypedDict, total=False):
-    novel_no: int | str
+    novel_no: int
     novel_name: str
     novel_full_img: str
     novel_img: str
@@ -37,8 +37,8 @@ class NovelResponse(TypedDict):
 
 
 class EpisodeItem(TypedDict, total=False):
-    episode_no: int | str
-    epi_num: int | str
+    episode_no: int
+    epi_num: int
     epi_title: str
 
 
@@ -67,6 +67,7 @@ class EpisodeContentResponse(TypedDict, total=False):
 
 class ChapterResult(TypedDict, total=False):
     html: str
+    signed_key: dict[str, str]
     error: str
     epi_no: int | None
     epi_title: str

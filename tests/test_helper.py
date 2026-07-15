@@ -1,6 +1,6 @@
 import sys
 import unittest
-from http.cookiejar import Cookie, MozillaCookieJar
+from http.cookiejar import Cookie, CookieJar, MozillaCookieJar
 from pathlib import Path
 
 import pytest
@@ -289,7 +289,7 @@ def test_cookie_helpers_handle_missing_or_bad_cookiejar():
     class NoCookies:
         pass
 
-    class BadCookies:
+    class BadCookies(CookieJar):
         def __iter__(self):
             raise TypeError("bad")
 
@@ -317,7 +317,7 @@ def test_remaining_helper_edges(monkeypatch, tmp_path):
     monkeypatch.setattr("src.helper.CONFIG_PATH", str(config_path))
     monkeypatch.setattr("src.helper.os.chmod", lambda *_args: (_ for _ in ()).throw(OSError("chmod")))
     save_config({"login_at": "token"})
-    assert load_config()["login_at"] == "token"
+    assert load_config().get("login_at") == "token"
 
     cookie_path = tmp_path / "cookies.txt"
     cookie_path.write_text(

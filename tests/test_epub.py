@@ -1,3 +1,5 @@
+import hashlib
+
 import requests
 
 from src.api import NovelpiaClient
@@ -87,6 +89,7 @@ def test_build_continues_when_chapter_image_fetch_fails(monkeypatch, tmp_path):
         [{"episode_no": 1, "epi_title": "One"}],
         filename_hint="Book",
         fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p><img src="https://example.com/i.jpg"></p>'}],
+        chapter_images=True,
     )
 
     assert result == (str(tmp_path / "book" / "book.epub"), "Book", 1)
@@ -103,7 +106,17 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
     }
     password = "test-" + "password"
     client: NovelpiaClient = NovelpiaClient(email="user@example.com", password=password, throttle=0)
-    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image fetch")))
+
+    get_calls: list[tuple] = []
+
+    def _track_get(*args, **kwargs):
+        get_calls.append((args, kwargs))
+        resp = requests.Response()
+        resp.status_code = 404
+        resp._content = b""
+        return resp
+
+    monkeypatch.setattr(client.s, "get", _track_get)
     monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
 
     EpubBuilder(str(tmp_path)).build(
@@ -114,10 +127,12 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
         fetched_results=[
             {"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}
         ],
+        chapter_images=True,
     )
 
+    assert get_calls == [], "chapter image fetch should not be attempted without CloudFront cookies"
+
     chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
-    assert "<img" not in chapter.content
     assert "before" in chapter.content
     assert "after" in chapter.content
     assert all(not item.file_name.startswith("images/") for item in written[0].get_items())
@@ -213,17 +228,39 @@ def test_build_falls_back_to_novel_img_when_full_img_bytes_are_not_a_real_image(
     assert cover_items[0].content == b"\xff\xd8\xffreal-jpeg-bytes"
 
 
-def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
+def test_epub_image_adapter_rewrites_and_caches_image_when_fetch_succeeds(monkeypatch, tmp_path):
     client = NovelpiaClient(throttle=0)
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
-    adapter = EpubImageAdapter(ImageFetcher(), client)
+    cache_dir = tmp_path / ".cache" / "images"
+    adapter = EpubImageAdapter(ImageFetcher(), client, image_cache_dir=str(cache_dir))
 
-    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
+    rewritten, items = adapter.add_images_and_rewrite(
+        '<p><img src="/cover.png"></p>',
+        signed_key={"CloudFront-Policy": "p", "CloudFront-Key-Pair-Id": "k", "CloudFront-Signature": "s"},
+    )
 
     assert 'src="images/img_00001.png"' in rewritten
     assert len(items) == 1
     assert items[0].file_name == "images/img_00001.png"
     assert items[0].content == b"image-bytes"
+    expected_path = cache_dir / f"{hashlib.sha256(b'https://global.novelpia.com/cover.png').hexdigest()}.png"
+    assert expected_path.read_bytes() == b"image-bytes"
+
+
+def test_epub_image_adapter_uses_cached_image_without_signed_key(monkeypatch, tmp_path):
+    src = "https://pv-gn.novelpia.com/i.png"
+    cache_dir = tmp_path / ".cache" / "images"
+    cache_dir.mkdir(parents=True)
+    image_bytes = b"\x89PNG\r\n\x1a\nimage"
+    (cache_dir / f"{hashlib.sha256(src.encode()).hexdigest()}.png").write_bytes(image_bytes)
+    client = _failing_client(monkeypatch)
+    adapter = EpubImageAdapter(ImageFetcher(), client, image_cache_dir=str(cache_dir))
+
+    rewritten, items = adapter.add_images_and_rewrite(f'<p><img src="{src}"></p>', embed_images=True)
+
+    assert 'src="images/img_00001.png"' in rewritten
+    assert len(items) == 1
+    assert items[0].content == image_bytes
 
 
 def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypatch):
@@ -238,13 +275,13 @@ def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypa
     assert rewritten.startswith("<p>")
 
 
-def test_epub_image_adapter_preserves_external_image_when_fetch_fails(monkeypatch):
+def test_epub_image_adapter_strips_image_when_fetch_fails(monkeypatch):
     monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
     adapter = EpubImageAdapter(ImageFetcher(), _failing_client(monkeypatch))
 
     rewritten, items = adapter.add_images_and_rewrite('<p><img src="https://example.com/missing.jpg"></p>')
 
-    assert 'src="https://example.com/missing.jpg"' in rewritten
+    assert "<img" not in rewritten
     assert items == []
 
 
@@ -271,7 +308,10 @@ def test_epub_image_adapter_derives_extension_for_unsupported_image_url(monkeypa
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse({"Content-Type": "image/png"}))
     adapter = EpubImageAdapter(ImageFetcher(), client)
 
-    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/file.bin"></p>')
+    rewritten, items = adapter.add_images_and_rewrite(
+        '<p><img src="/file.bin"></p>',
+        signed_key={"CloudFront-Policy": "p", "CloudFront-Key-Pair-Id": "k", "CloudFront-Signature": "s"},
+    )
 
     assert 'src="images/img_00001.png"' in rewritten
     assert len(items) == 1

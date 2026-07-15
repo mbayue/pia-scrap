@@ -20,10 +20,17 @@ from src.contracts import (
 
 
 class ResponseLike(Protocol):
-    status_code: int
-    reason: str
-    url: str
-    text: str
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def reason(self) -> str: ...
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def text(self) -> str: ...
 
     def json(self) -> Any: ...
     def raise_for_status(self) -> None: ...
@@ -87,7 +94,6 @@ def parse_novel_response(response: ResponseLike) -> NovelResponse:
     novel_body = required_object(result, "novel", "$.result.novel", "novel response")
     novel: NovelMeta = {}
     for key in (
-        "novel_no",
         "novel_name",
         "novel_full_img",
         "novel_img",
@@ -100,6 +106,11 @@ def parse_novel_response(response: ResponseLike) -> NovelResponse:
         value = novel_body.get(key)
         if value is not None:
             novel[key] = value
+    novel_no_raw = novel_body.get("novel_no")
+    if novel_no_raw is not None:
+        if not isinstance(novel_no_raw, int) or isinstance(novel_no_raw, bool):
+            raise ApiShapeError("novel response", "$.result.novel.novel_no", "integer")
+        novel["novel_no"] = novel_no_raw
     tag_list = novel_body.get("tag_list")
     if isinstance(tag_list, list):
         novel["tag_list"] = tag_list
@@ -136,10 +147,9 @@ def parse_episode_list_response(response: ResponseLike) -> EpisodeListResponse:
         for key in ("episode_no", "epi_num"):
             raw = row.get(key)
             if raw is not None:
-                try:
-                    episode[key] = int(raw)
-                except (ValueError, TypeError):
-                    episode[key] = raw
+                if not isinstance(raw, int) or isinstance(raw, bool):
+                    raise ApiShapeError("episode list response", f"$.result.list[{index}].{key}", "integer")
+                episode[key] = raw
         episodes.append(episode)
     typed_result: EpisodeListResult = {"list": episodes}
     return {"result": typed_result}

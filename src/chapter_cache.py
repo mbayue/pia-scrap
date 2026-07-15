@@ -123,12 +123,16 @@ def load_cache(book_dir: str) -> dict[int, ChapterResult]:
                     idx = int(row.get("idx") or 0)
                 except (TypeError, ValueError):
                     idx = 0
-                cache[epi_no] = {
+                cache_row: ChapterResult = {
                     "idx": idx,
                     "epi_no": epi_no,
                     "epi_title": str(row.get("epi_title") or ""),
                     "html": html_text,
                 }
+                signed_key = row.get("signed_key")
+                if isinstance(signed_key, dict):
+                    cache_row["signed_key"] = {str(key): str(value) for key, value in signed_key.items()}
+                cache[epi_no] = cache_row
     return cache
 
 
@@ -158,8 +162,9 @@ def write_cache_item(book_dir: str, row: ChapterResult) -> None:
         raise ValueError("cache row missing epi_no")
     epi_no = int(row_epi_no)
     ensure_dir(cache_dir(book_dir))
+    disk_row = {k: v for k, v in row.items() if k != "signed_key"}
     with open(cache_file_path(book_dir, epi_no), "w", encoding="utf-8") as f:
-        json.dump(row, f, ensure_ascii=False, indent=2)
+        json.dump(disk_row, f, ensure_ascii=False, indent=2)
 
 
 def write_cache_item_if_absent(book_dir: str, row: ChapterResult) -> bool:
@@ -189,12 +194,13 @@ def normalize_cache_row(ep: EpisodeItem, res: ChapterResult, pos: int) -> Chapte
     cache_epi_no = res.get("epi_no") or epi_no
     if cache_epi_no is None:
         return None
-    return {
+    cache_row: ChapterResult = {
         "idx": chapter_idx(ep, pos),
         "epi_no": int(cache_epi_no),
         "epi_title": res.get("epi_title") or chapter_title(ep),
         "html": res.get("html") or "",
     }
+    return cache_row
 
 
 def make_incremental_cache_writer(

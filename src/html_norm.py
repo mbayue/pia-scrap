@@ -8,7 +8,6 @@ from src.helper import normalize_url
 def html_from_episode_text(raw_html: str) -> str:
     soup = BeautifulSoup(raw_html or "", "lxml")
 
-    # normalize images
     for img in soup.find_all("img"):
         if img.get("data-src") and not img.get("src"):
             img["src"] = img["data-src"]

@@ -203,7 +203,6 @@ class NovelpiaClient:
         url = f"{const.API_BASE}/v1/novel/episode"
         headers = merge_login_at({}, self.tokens.login_at)
         params = {"episode_no": episode_no}
-        # Throttle once per chapter before the ticket/content pair.
         if self.throttle and not skip_throttle:
             time.sleep(self.throttle + random.SystemRandom().uniform(0.1, 0.4))
         r = request_with_retries(
@@ -322,6 +321,7 @@ class NovelpiaClient:
         # episode_content). The first attempt reuses ticket_data/tdata when the
         # caller already fetched a ticket (e.g. the ad-reward unlock flow).
         cdata: EpisodeContentResponse | None = None
+        tdata: Mapping[str, Any] = {}
         for attempt in range(1, CONTENT_FETCH_ATTEMPTS + 1):
             try:
                 tdata = ticket_data if (attempt == 1 and ticket_data is not None) else self.episode_ticket(epi_no)
@@ -350,6 +350,7 @@ class NovelpiaClient:
         assert cdata is not None, "loop must break with cdata set or return early"
 
         result_block = cdata.get("result", {})
+        ticket_result = tdata.get("result", {}) if isinstance(tdata, Mapping) else {}
         data_block = result_block.get("data", {}) if isinstance(result_block, dict) else {}
 
         parts = []
@@ -383,6 +384,7 @@ class NovelpiaClient:
             "epi_title": epi_title,
             "epi_no": epi_no,
             "idx": idx,
+            "signed_key": ticket_result.get("signed_key", {}) if isinstance(ticket_result, Mapping) else {},
         }
 
     def fetch_episodes_parallel(

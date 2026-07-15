@@ -1,7 +1,7 @@
 import json
-from typing import cast
 
 import requests
+from requests.cookies import RequestsCookieJar
 
 from src.api import (
     AD_REWARD_WAIT_SECONDS,
@@ -20,7 +20,7 @@ from src.api import (
 from src.contracts import ChapterResult, EpisodeItem
 
 
-class FakeResponse:
+class FakeResponse(requests.Response):
     def __init__(
         self,
         status_code,
@@ -28,36 +28,68 @@ class FakeResponse:
         url="https://api-global.novelpia.com/test",
         reason="Internal Server Error",
     ):
+        super().__init__()
         self.status_code = status_code
         self._payload = payload
+        self._content = str(payload).encode("utf-8")
         self.reason = reason
         self.url = url
-        self.text = str(payload)
 
-    def json(self):
+    def json(
+        self,
+        *,
+        cls=None,
+        object_hook=None,
+        parse_float=None,
+        parse_int=None,
+        parse_constant=None,
+        object_pairs_hook=None,
+        **kwds,
+    ):
         return self._payload
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(self.reason, response=cast(requests.Response, self))
+            raise requests.HTTPError(self.reason, response=self)
 
 
-class FakeSession:
+class FakeSession(requests.Session):
     def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = 0
-        self.headers = {}
-        self.cookies = []
+        super().__init__()
+        self._responses = list(responses)
+        self.calls = []
 
-    def request(self, method, url, *, headers=None, params=None, json=None, data=None, timeout=30):
-        self.calls += 1
-        return self.responses.pop(0)
+    def request(
+        self,
+        method,
+        url,
+        params=None,
+        data=None,
+        headers=None,
+        cookies=None,
+        files=None,
+        auth=None,
+        timeout=None,
+        allow_redirects=True,
+        proxies=None,
+        hooks=None,
+        stream=None,
+        verify=None,
+        cert=None,
+        json=None,
+    ) -> requests.Response:
+        self.calls.append((method, url))
+        item = self._responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
-class FakeCookie:
-    def __init__(self, name: str, value: str):
-        self.name = name
-        self.value = value
+def cookie_jar(**cookies: str) -> RequestsCookieJar:
+    jar = RequestsCookieJar()
+    for name, value in cookies.items():
+        jar.set(name, value)
+    return jar
 
 
 class RecordingSession(FakeSession):
@@ -65,7 +97,25 @@ class RecordingSession(FakeSession):
         super().__init__(responses)
         self.requests = []
 
-    def request(self, method, url, *, headers=None, params=None, json=None, data=None, timeout=30):
+    def request(
+        self,
+        method,
+        url,
+        params=None,
+        data=None,
+        headers=None,
+        cookies=None,
+        files=None,
+        auth=None,
+        timeout=None,
+        allow_redirects=True,
+        proxies=None,
+        hooks=None,
+        stream=None,
+        verify=None,
+        cert=None,
+        json=None,
+    ) -> requests.Response:
         self.requests.append({"method": method, "url": url, "headers": headers, "params": params, "json": json})
         return super().request(method, url, headers=headers, params=params, json=json, data=data, timeout=timeout)
 
@@ -81,7 +131,7 @@ def test_request_with_retries_retries_http_500_then_returns_success(monkeypatch,
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
-    assert session.calls == 2
+    assert len(session.calls) == 2
     assert response.status_code == 200
     assert "[warn] Too many requests. Please try again later. retrying in 1s (1/3)" in capsys.readouterr().out
 
@@ -97,7 +147,7 @@ def test_request_with_retries_retries_502(monkeypatch):
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
-    assert session.calls == 2
+    assert len(session.calls) == 2
     assert response.status_code == 200
 
 
@@ -118,7 +168,7 @@ def test_request_with_retries_raises_concise_api_message_after_final_500(monkeyp
     else:
         raise AssertionError("expected HTTPError")
 
-    assert session.calls == 3
+    assert len(session.calls) == 3
 
 
 def test_request_with_retries_does_not_retry_401_before_auth_recovery(monkeypatch):
@@ -131,7 +181,7 @@ def test_request_with_retries_does_not_retry_401_before_auth_recovery(monkeypatc
 
     response = request_with_retries(session, "GET", "https://api-global.novelpia.com/test", max_retries=3)
 
-    assert session.calls == 1
+    assert len(session.calls) == 1
     assert response.status_code == 401
 
 
@@ -159,7 +209,7 @@ def test_request_with_retries_refreshes_then_retries_expired_token(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert session.calls == 2
+    assert len(session.calls) == 2
     assert refreshed == [True]
 
 
@@ -190,7 +240,7 @@ def test_request_with_retries_refreshes_on_500_token_expired(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert session.calls == 2
+    assert len(session.calls) == 2
     assert refreshed == [True]
 
 
@@ -224,7 +274,7 @@ def test_request_with_retries_retries_recovered_response_that_is_still_500(monke
     )
 
     assert response.status_code == 200
-    assert session.calls == 3
+    assert len(session.calls) == 3
     assert refreshed == [True]
 
 
@@ -236,16 +286,10 @@ def test_request_with_retries_rebuilds_auth_headers_after_refresh(monkeypatch):
             FakeResponse(200, {"result": "ok"}),
         ]
     )
-    session.cookies = [
-        FakeCookie("USERKEY", "old-user"),
-        FakeCookie("TKEY", "old-token"),
-    ]
+    session.cookies = cookie_jar(USERKEY="old-user", TKEY="old-token")
 
     def refresh():
-        session.cookies = [
-            FakeCookie("USERKEY", "new-user"),
-            FakeCookie("TKEY", "new-token"),
-        ]
+        session.cookies = cookie_jar(USERKEY="new-user", TKEY="new-token")
         return "fresh-login"
 
     response = request_with_retries(
@@ -289,7 +333,7 @@ def test_request_with_retries_logs_in_when_refresh_fails(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert session.calls == 2
+    assert len(session.calls) == 2
     assert logins == [True]
 
 
@@ -322,10 +366,7 @@ def test_login_ignores_placeholder_userkey_cookie():
     password = "test-" + "password"
     client = NovelpiaClient(email="email@example.com", password=password, userkey="generated-user", throttle=0)
     fake_session = FakeSession([FakeResponse(200, {"result": {"LOGINAT": "login-token"}})])
-    fake_session.cookies = [
-        FakeCookie("USERKEY", "login-user"),
-        FakeCookie("TKEY", "login-t"),
-    ]
+    fake_session.cookies = cookie_jar(USERKEY="login-user", TKEY="login-t")
     client.__dict__["s"] = fake_session
 
     client.login()
@@ -510,7 +551,7 @@ def test_episode_ticket_classifies_ad_block_without_retrying(monkeypatch):
     else:
         raise AssertionError("expected KnownApiBlockError")
 
-    assert session.calls == 1
+    assert len(session.calls) == 1
 
 
 def test_episode_ticket_classifies_premium_block_without_retrying(monkeypatch):
@@ -537,7 +578,7 @@ def test_episode_ticket_classifies_premium_block_without_retrying(monkeypatch):
     else:
         raise AssertionError("expected KnownApiBlockError")
 
-    assert session.calls == 1
+    assert len(session.calls) == 1
 
 
 def test_episode_ticket_unknown_500_still_retries(monkeypatch):
@@ -559,7 +600,7 @@ def test_episode_ticket_unknown_500_still_retries(monkeypatch):
     else:
         raise AssertionError("expected HTTPError")
 
-    assert session.calls == 3
+    assert len(session.calls) == 3
 
 
 def test_probe_ad_reward_unlock_waits_grants_then_retries_ticket(monkeypatch):
@@ -616,7 +657,7 @@ def test_fetch_episode_retries_with_fresh_ticket_on_transient_403(monkeypatch):
     assert result.get("html")
     assert result.get("error") is None
     assert sleeps == [1.0]
-    assert session.calls == 4
+    assert len(session.calls) == 4
 
 
 def test_fetch_episode_403_retry_warning_identifies_the_chapter(monkeypatch, capsys):
@@ -669,7 +710,7 @@ def test_fetch_episode_redacts_content_token_after_persistent_403(monkeypatch):
 
     assert "secret-token" not in str(result.get("error"))
     assert "_t=<redacted>" in str(result.get("error"))
-    assert session.calls == 6
+    assert len(session.calls) == 6
 
 
 def test_fetch_episode_returns_error_on_bad_content_shape(monkeypatch):

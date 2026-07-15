@@ -15,10 +15,6 @@ from src.logutil import get_logger
 
 logger = get_logger(__name__)
 
-# ----------------------------
-# Helpers
-# ----------------------------
-
 
 def extract_genre_names(novel: Mapping[str, Any]) -> list[str]:
     """Extract unique genre/tag names from a NovelResponse."""
@@ -105,11 +101,6 @@ def normalize_description(raw: str) -> str:
     return html_module.unescape(text).strip()
 
 
-# ----------------------------
-# Config/auth management
-# ----------------------------
-
-
 class AuthConfig(TypedDict, total=False):
     login_at: str
     userkey: str
@@ -169,11 +160,6 @@ def save_config(cfg: Mapping[str, str | None]) -> None:
             except OSError:
                 pass
         logger.error(f"Error occurred while saving config: {e}")
-
-
-# ----------------------------
-# Auth token management & header merging
-# ----------------------------
 
 
 def merge_login_at(headers: Mapping[str, str], login_at: str | None) -> dict[str, str]:
@@ -311,11 +297,6 @@ def attach_auth_cookies(session, headers: Mapping[str, str] | None = None) -> di
     return dict(headers) if headers is not None else None
 
 
-# ----------------------------
-# Token extraction (STRICT)
-# ----------------------------
-
-
 def iter_strings(obj):
     if isinstance(obj, str):
         yield obj
@@ -382,13 +363,11 @@ def extract_t_token(tdata: Mapping[str, Any]) -> str | None:
     res = tdata.get("result", {}) if isinstance(tdata, dict) else {}
     fallback_token: str | None = None
 
-    # 1) common keys at result
     jwt, fb = _scan_mapping_for_token(res)
     if jwt:
         return jwt
     fallback_token = fb
 
-    # 2) nested dicts under result
     if isinstance(res, dict):
         for _, v in res.items():
             if isinstance(v, dict):
@@ -397,7 +376,6 @@ def extract_t_token(tdata: Mapping[str, Any]) -> str | None:
                     return j
                 fallback_token = fallback_token or fb2
 
-    # 3) URL that is the official content endpoint with any _t
     for s in iter_strings(tdata):
         if isinstance(s, str) and (s.startswith("http://") or s.startswith("https://")):
             jwt, fb, is_url = _content_url_token(s)

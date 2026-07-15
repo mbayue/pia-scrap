@@ -49,3 +49,7 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
+
+      - name: Run mypy
+        run: python -m mypy src/ web_app.py main.py
+

@@ -9,7 +9,7 @@ except ImportError as e:
     raise SystemExit("Web dependencies not installed. Run: pip install -e '.[web]'") from e
 
 from src import web_jobs
-from src.runner import QueueOptions
+from src.runner import CliUsageError, QueueOptions, validate_queue_options
 from src.web_jobs import (
     DownloadUnavailableError,
     JobInputError,
@@ -82,6 +82,11 @@ def create_job(request: JobRequest) -> dict[str, str]:
         cookie_file=request.cookie_file,
         cookie_text=request.cookie_text,
     )
+    try:
+        validate_queue_options(options)
+    except CliUsageError as exc:
+        _job_semaphore.release()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         return {
             "job_id": create_web_job(

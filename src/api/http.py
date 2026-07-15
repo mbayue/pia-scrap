@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable, Mapping
-from typing import Protocol
+from typing import cast
 
 import requests
 
@@ -14,34 +14,19 @@ from src.logutil import get_logger
 logger = get_logger(__name__)
 
 JsonScalar = str | int | float | bool | None
-JsonObject = Mapping[str, JsonScalar | list[JsonScalar] | Mapping[str, JsonScalar]]
 
 RETRY_WAIT_SECONDS = 1.0
 
 
-class RequestSession(Protocol):
-    def request(
-        self,
-        method: str,
-        url: str,
-        *,
-        headers: Mapping[str, str] | None = None,
-        params: object = None,
-        json: object = None,
-        data: object = None,
-        timeout: int = 30,
-    ) -> ResponseLike: ...
-
-
 def request_with_retries(
-    session: RequestSession,
+    session: requests.Session,
     method: str,
     url: str,
     *,
     headers: Mapping[str, str] | None = None,
-    params: JsonObject | None = None,
-    json: JsonObject | None = None,
-    data: JsonObject | None = None,
+    params: dict | None = None,
+    json: dict | None = None,
+    data: dict | None = None,
     timeout: int = 30,
     max_retries: int = 3,
     allow_refresh: bool = False,
@@ -73,8 +58,17 @@ def request_with_retries(
                 logger.info(f"[api]   -> {method} {url} (attempt {attempt}/{max_retries})")
                 _log_request_preview(method, session, request_headers, params, json)
 
-            r = session.request(
-                method, url, headers=request_headers, params=params, json=json, data=data, timeout=timeout
+            r = cast(
+                ResponseLike,
+                session.request(
+                    method,
+                    url,
+                    headers=request_headers,
+                    params=params,
+                    json=json,
+                    data=data,
+                    timeout=timeout,
+                ),
             )
 
             # Novelpia surfaces an expired/invalid session token as HTTP 500 with a
@@ -148,7 +142,7 @@ def request_with_retries(
 
 
 def _build_request_headers(
-    session: RequestSession, url: str, base_headers: Mapping[str, str] | None
+    session: requests.Session, url: str, base_headers: Mapping[str, str] | None
 ) -> Mapping[str, str] | None:
     """Attach auth cookies to the request headers, skipping the login endpoint.
 
@@ -166,10 +160,10 @@ def _build_request_headers(
 
 def _log_request_preview(
     method: str,
-    session: RequestSession,
+    session: requests.Session,
     request_headers: Mapping[str, str] | None,
-    params: JsonObject | None,
-    json: JsonObject | None,
+    params: dict | None,
+    json: dict | None,
 ) -> None:
     eff_headers: dict[str, str] = {}
     try:
@@ -224,7 +218,7 @@ def _handle_server_error(
 
     detail = api_message or "Server error"
     if attempt >= max_retries:
-        # r is a ResponseLike (the RequestSession Protocol); only a real
+        # r is a ResponseLike; only a real
         # requests.Response is accepted by requests.HTTPError's response arg.
         if isinstance(r, requests.Response):
             raise requests.HTTPError(detail, response=r)
@@ -297,13 +291,13 @@ def _run_refresh_then_login(
 
 
 def _try_auth_recovery(
-    session: RequestSession,
+    session: requests.Session,
     url: str,
     method: str,
     base_headers: Mapping[str, str] | None,
-    params: JsonObject | None,
-    json: JsonObject | None,
-    data: JsonObject | None,
+    params: dict | None,
+    json: dict | None,
+    data: dict | None,
     timeout: int,
     r: ResponseLike,
     allow_refresh: bool,
@@ -338,7 +332,16 @@ def _try_auth_recovery(
             retry_headers = attach_auth_cookies(session, retry_headers)
     except Exception as e:  # noqa: BLE001 - best-effort header injection
         logger.error(f"Error occurred while attaching auth cookies: {e}")
-    new_response = session.request(
-        method, url, headers=retry_headers, params=params, json=json, data=data, timeout=timeout
+    new_response = cast(
+        ResponseLike,
+        session.request(
+            method,
+            url,
+            headers=retry_headers,
+            params=params,
+            json=json,
+            data=data,
+            timeout=timeout,
+        ),
     )
     return new_response, did_refresh, did_login

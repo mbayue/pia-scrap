@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any
 
 import pytest
 import requests
@@ -27,33 +27,49 @@ from src.api.parse import (
 )
 
 
-class Response:
+class Response(requests.Response):
     def __init__(self, status_code=200, payload=None, text="text", reason="Reason"):
+        super().__init__()
         self.status_code = status_code
         self._payload = payload if payload is not None else {}
-        self.text = text
+        self._content = text.encode("utf-8")
         self.reason = reason
         self.url = "https://api-global.novelpia.com/test"
 
-    def json(self):
+    def json(self, **kwargs: Any) -> Any:
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._payload
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise requests.HTTPError(self.reason, response=cast(requests.Response, self))
+            raise requests.HTTPError(self.reason, response=self)
 
 
-class Session:
+class Session(requests.Session):
     def __init__(self, responses=()):
+        super().__init__()
         self.responses = list(responses)
-        self.headers = {}
-        self.cookies = []
         self.calls = []
 
-    def request(self, method, url, *, headers=None, params=None, json=None, data=None, timeout=30):
-        self.calls.append((method, url, headers, params, json, data, timeout))
+    def request(
+        self,
+        method: str | bytes,
+        url: str | bytes,
+        *args: Any,
+        **kwargs: Any,
+    ) -> requests.Response:
+        self.calls.append(
+            (
+                method,
+                url,
+                kwargs.get("headers"),
+                kwargs.get("params"),
+                kwargs.get("json"),
+                kwargs.get("data"),
+                kwargs.get("timeout"),
+            )
+        )
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -78,10 +94,30 @@ def test_parse_edges_full_shapes():
     assert result.get("info") == {"epi_cnt": 2}
     assert result.get("tag_list") == ["B"]
 
-    episodes = parse_episode_list_response(
-        Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": "1", "epi_num": "x"}]}})
-    )
-    assert episodes == {"result": {"list": [{"epi_title": "T", "episode_no": 1, "epi_num": "x"}]}}
+    with pytest.raises(ApiShapeError, match=r"integer at \$\.result\.list\[0\]\.epi_num"):
+        parse_episode_list_response(
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": 1, "epi_num": "x"}]}})
+        )
+
+
+def test_parse_novel_no_rejects_non_int():
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": True, "novel_name": "X"}}}))
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": 5.5, "novel_name": "X"}}}))
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": "123", "novel_name": "X"}}}))
+
+
+def test_parse_episode_no_rejects_non_int():
+    with pytest.raises(ApiShapeError, match=r"integer.*episode_no"):
+        parse_episode_list_response(
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": "1", "epi_num": 1}]}})
+        )
+    with pytest.raises(ApiShapeError, match=r"integer.*epi_num"):
+        parse_episode_list_response(
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": 1, "epi_num": True}]}})
+        )
 
     content = parse_episode_content_response(
         Response(
@@ -91,8 +127,8 @@ def test_parse_edges_full_shapes():
             }
         )
     )
-    result = content.get("result", {})
-    assert result.get("data") == {"epi_content": "a"}
+    content_result = content.get("result", {})
+    assert content_result.get("data") == {"epi_content": "a"}
     assert content.get("content") == "top"
     assert collect_epi_content_parts({"epi_content2": "b", "epi_content": "a", "x": "z"}) == ["a", "b"]
 
@@ -130,15 +166,25 @@ def test_http_defensive_paths(monkeypatch, capsys):
     monkeypatch.setattr("src.api.http.time.sleep", lambda _seconds: None)
     assert _build_request_headers(Session(), "https://x/v1/member/login", {"h": "1"}) == {"h": "1"}
 
-    class BadHeaderSession:
+    class BadHeaderSession(requests.Session):
         headers = {}
 
-        def request(self, method, url, *, headers=None, params=None, json=None, data=None, timeout=30):
+        def __init__(self):
+            pass
+
+        def request(
+            self,
+            method: str | bytes,
+            url: str | bytes,
+            *args: Any,
+            **kwargs: Any,
+        ) -> requests.Response:
             return Response()
 
-        @property
-        def cookies(self):
-            raise RuntimeError("bad cookies")
+        def __getattribute__(self, name: str) -> Any:
+            if name == "cookies":
+                raise RuntimeError("bad cookies")
+            return super().__getattribute__(name)
 
     assert _build_request_headers(BadHeaderSession(), "https://x/other", {"h": "1"}) == {"h": "1"}
     _log_request_preview("GET", Session(), {"h": "1"}, {"a": 1}, {"password": "secret"})

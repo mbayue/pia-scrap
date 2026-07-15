@@ -27,11 +27,6 @@ class NovelMetadataClient(Protocol):
     def episode_list(self, novel_id: int, rows: int) -> EpisodeListResponse: ...
 
 
-# ----------------------------
-# Novelpia Novel & Episodes Fetcher
-# ----------------------------
-
-
 def user_subscription_status(me_response: object) -> AccountStatus:
     if not isinstance(me_response, dict):
         return "unknown"
@@ -56,7 +51,6 @@ def fetch_novel_and_episodes(
     client: NovelMetadataClient,
     novel_id: int,
 ) -> tuple[NovelResponse, list[EpisodeItem], str, AccountStatus]:
-    # Auth check
     account_status: AccountStatus = "unknown"
     try:
         res = client.me()

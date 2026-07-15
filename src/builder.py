@@ -108,6 +108,7 @@ def build_epub(
     update: bool = False,
     retry_failed: bool = False,
     max_workers: int = 1,
+    chapter_images: bool = False,
 ) -> tuple[str | None, str, int]:
     """Build an EPUB file for the given novel. Returns (path, title, chapter_count) or (None, title, 0) for no-op."""
     result = _prepare_chapters(
@@ -138,6 +139,8 @@ def build_epub(
         novel_id=novel_id,
         fetched_results=build_results,
         max_workers=max_workers,
+        image_cache_dir=os.path.join(book_dir, ".cache", "images"),
+        chapter_images=chapter_images,
     )
 
 
@@ -237,7 +240,6 @@ def merge_cache_with_fetched(
         if cached is not None and cached.get("html"):
             merged.append(cached)
             continue
-        # Neither available; nothing to render for this episode.
     return merged
 
 

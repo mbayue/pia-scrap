@@ -1,3 +1,4 @@
+import hashlib
 import os
 import time
 from collections.abc import Iterator
@@ -34,6 +35,7 @@ SIGNED_POLICY_COOKIE_KEYS = {"Policy", "Expires"}
 IMAGE_MAX_RETRIES = 3
 IMAGE_429_BACKOFF_SECONDS = 2.0
 IMAGE_RETRY_DELAY_SECONDS = 1.0
+TRUSTED_IMAGE_HOSTS = {"pv-gn.novelpia.com", "images.novelpia.com"}
 
 # Magic-byte signatures for image sniffing. Some hosts (e.g. Novelpia's cover
 # CDN) serve real images with a generic ``Content-Type: application/octet-stream``
@@ -88,14 +90,10 @@ class ImageFetcher:
         self.debug_dump = debug_dump
 
     def fetch_headers(self, client: ImageClient) -> dict[str, str]:
-        headers = {
+        return {
             "accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "referer": BASE_URL + "/",
         }
-        cloudfront_parts = [f"{name}={value}" for name, value in _iter_cloudfront_cookies(client, self.debug_dump)]
-        if cloudfront_parts:
-            headers["Cookie"] = "; ".join(cloudfront_parts)
-        return headers
 
     def can_fetch_chapter_images(self, client: ImageClient) -> bool:
         matched_keys = {cloudfront_cookie_key(name) for name, _ in _iter_cloudfront_cookies(client, self.debug_dump)}
@@ -107,7 +105,16 @@ class ImageFetcher:
             return None
         return fetched[0]
 
-    def fetch_image(self, client: ImageClient, url: str) -> tuple[bytes, str] | None:
+    def fetch_image(
+        self, client: ImageClient, url: str, signed_key: dict[str, str] | None = None
+    ) -> tuple[bytes, str] | None:
+        if signed_key:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if host and host in TRUSTED_IMAGE_HOSTS and parsed.scheme == "https":
+                for name in ("CloudFront-Policy", "CloudFront-Key-Pair-Id", "CloudFront-Signature"):
+                    if signed_key.get(name):
+                        client.s.cookies.set(name, signed_key[name], domain=host, path="/")
         for attempt in range(1, IMAGE_MAX_RETRIES + 1):
             try:
                 resp = client.s.get(url, headers=self.fetch_headers(client), timeout=client.timeout)
@@ -152,24 +159,55 @@ class ImageFetcher:
 
 
 class EpubImageAdapter:
-    def __init__(self, fetcher: ImageFetcher, client: ImageClient, embed_images: bool = True):
+    def __init__(
+        self,
+        fetcher: ImageFetcher,
+        client: ImageClient,
+        embed_images: bool = True,
+        image_cache_dir: str | None = None,
+    ):
         self.fetcher = fetcher
         self.client = client
         self.embed_images = embed_images
+        self.image_cache_dir = image_cache_dir
         self.image_cache: dict[str, str] = {}
         self.img_index = 1
 
-    def add_images_and_rewrite(self, html_str: str) -> tuple[str, list[epub.EpubItem]]:
+    def _cached_image(self, src: str) -> tuple[bytes, str] | None:
+        if not self.image_cache_dir:
+            return None
+        stem = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        for ext in SUPPORTED_IMAGE_EXTENSIONS:
+            path = os.path.join(self.image_cache_dir, f"{stem}{ext}")
+            try:
+                with open(path, "rb") as handle:
+                    content = handle.read()
+            except OSError:
+                continue
+            if sniff_image_extension(content) == ext or (ext == ".jpeg" and sniff_image_extension(content) == ".jpg"):
+                return content, ".jpg" if ext == ".jpeg" else ext
+        return None
+
+    def _cache_image(self, src: str, content: bytes, ext: str) -> None:
+        if not self.image_cache_dir:
+            return
+        path = os.path.join(self.image_cache_dir, f"{hashlib.sha256(src.encode('utf-8')).hexdigest()}{ext}")
+        try:
+            os.makedirs(self.image_cache_dir, exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(content)
+        except OSError as exc:
+            if self.fetcher.debug_dump:
+                logger.debug(f"[debug] image cache write failed: {path}: {exc}")
+
+    def add_images_and_rewrite(
+        self, html_str: str, signed_key: dict[str, str] | None = None, embed_images: bool | None = None
+    ) -> tuple[str, list[epub.EpubItem]]:
         soup = BeautifulSoup(html_str, "lxml")
         added_items: list[epub.EpubItem] = []
 
-        if not self.embed_images:
-            for img in soup.find_all("img"):
-                img.decompose()
-            if soup.body is None:
-                return str(soup), added_items
-            return "".join(str(child) for child in soup.body.contents), added_items
-
+        if embed_images is None:
+            embed_images = self.embed_images
         for img in soup.find_all("img"):
             src_value = img.get("src")
             if not src_value:
@@ -179,10 +217,14 @@ class EpubImageAdapter:
                 img["src"] = self.image_cache[src]
                 continue
 
-            fetched = self.fetcher.fetch_image(self.client, src)
+            fetched = self._cached_image(src) if embed_images else None
+            if fetched is None and embed_images and signed_key:
+                fetched = self.fetcher.fetch_image(self.client, src, signed_key)
             if fetched is None:
+                img.decompose()
                 continue
             img_bytes, ext = fetched
+            self._cache_image(src, img_bytes, ext)
 
             fname = f"images/img_{self.img_index:05d}{ext}"
             self.image_cache[src] = fname
