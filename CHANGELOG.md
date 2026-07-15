@@ -1,6 +1,23 @@
 # Changelog
 
-All notable changes to PIA Scrap will be documented in this file.
+This file records notable PIA Scrap changes.
+
+## [2.8.0] - 2026-07-14
+
+### Added
+
+- Web jobs validate options before starting a worker
+- `-img` CLI option to fetch, cache, and embed chapter images in EPUB output
+- URL-hashed chapter-image cache under `.cache/images/`, reused by later `-img` EPUB rebuilds
+
+### Fixed
+
+- EPUB builds clear image-fetch fallback timers after requests complete
+- EPUB chapter images use the episode's signed CloudFront key when embedding images
+- EPUB chapter, About, and table-of-contents pages use the book stylesheet
+- API response parsing rejects invalid numeric novel and episode IDs
+- Chapter results keep the ticket `signed_key` data
+- API test doubles match `requests.Response` and `requests.Session` contracts under Pyright/Pylance without suppressions
 
 ## [2.7.0] - 2026-07-12
 

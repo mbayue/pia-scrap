@@ -42,6 +42,7 @@ class OutputOptions:
     out: str = "output"
     lang: str = "en"
     txt: bool = False
+    chapter_images: bool = False
 
 
 @dataclass
@@ -160,6 +161,7 @@ def build_queue_request(args: argparse.Namespace) -> QueueRequest:
         update=args.update,
         retry_failed=args.retry_failed,
         txt=args.txt,
+        chapter_images=getattr(args, "chapter_images", False),
         email=args.email,
         password=args.password,
         cookie_file=getattr(args, "cookie_file", None),
@@ -337,18 +339,23 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
             try:
                 builder_fn = build_txt if options.txt else build_epub
                 fmt_label = "TXT" if options.txt else "EPUB"
+                build_kwargs = {
+                    "start_chapter": options.start_chapter,
+                    "end_chapter": options.end_chapter,
+                    "max_chapters": max_chapters,
+                    "language": options.lang,
+                    "debug_dump": options.debug,
+                    "update": options.update,
+                    "retry_failed": options.retry_failed,
+                    "max_workers": options.workers,
+                }
+                if not options.txt:
+                    build_kwargs["chapter_images"] = options.chapter_images
                 out_result, title, count = builder_fn(
                     client,
                     novel_id,
                     options.out,
-                    start_chapter=options.start_chapter,
-                    end_chapter=options.end_chapter,
-                    max_chapters=max_chapters,
-                    language=options.lang,
-                    debug_dump=options.debug,
-                    update=options.update,
-                    retry_failed=options.retry_failed,
-                    max_workers=options.workers,
+                    **build_kwargs,
                 )
                 if out_result is None:
                     reason = "No failed chapters to retry" if options.retry_failed else "No updates found"

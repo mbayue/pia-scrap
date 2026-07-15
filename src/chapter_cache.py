@@ -123,12 +123,16 @@ def load_cache(book_dir: str) -> dict[int, ChapterResult]:
                     idx = int(row.get("idx") or 0)
                 except (TypeError, ValueError):
                     idx = 0
-                cache[epi_no] = {
+                cache_row: ChapterResult = {
                     "idx": idx,
                     "epi_no": epi_no,
                     "epi_title": str(row.get("epi_title") or ""),
                     "html": html_text,
                 }
+                signed_key = row.get("signed_key")
+                if isinstance(signed_key, dict):
+                    cache_row["signed_key"] = {str(key): str(value) for key, value in signed_key.items()}
+                cache[epi_no] = cache_row
     return cache
 
 
@@ -189,12 +193,16 @@ def normalize_cache_row(ep: EpisodeItem, res: ChapterResult, pos: int) -> Chapte
     cache_epi_no = res.get("epi_no") or epi_no
     if cache_epi_no is None:
         return None
-    return {
+    cache_row: ChapterResult = {
         "idx": chapter_idx(ep, pos),
         "epi_no": int(cache_epi_no),
         "epi_title": res.get("epi_title") or chapter_title(ep),
         "html": res.get("html") or "",
     }
+    signed_key = res.get("signed_key")
+    if isinstance(signed_key, dict):
+        cache_row["signed_key"] = {str(key): str(value) for key, value in signed_key.items()}
+    return cache_row
 
 
 def make_incremental_cache_writer(

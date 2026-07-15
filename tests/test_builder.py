@@ -463,10 +463,10 @@ def test_fetch_with_cache_redacts_failed_chapter_tokens(tmp_path):
     assert "_t=<redacted>" in failed
 
 
-def test_select_episodes_skips_malformed_epi_num():
+def test_select_episodes_skips_missing_epi_num():
     episodes: list[EpisodeItem] = [
         {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
-        {"episode_no": 11, "epi_num": "bad", "epi_title": "Two"},
+        {"episode_no": 11, "epi_title": "Two"},
         {"episode_no": 12, "epi_title": "Three"},
         {"episode_no": 13, "epi_num": 4, "epi_title": "Four"},
     ]
@@ -487,10 +487,10 @@ def test_select_episodes_applies_start_end_then_max():
     assert [row.get("episode_no") for row in selected] == [11, 12]
 
 
-def test_select_episodes_keeps_malformed_epi_num_when_no_range_set():
+def test_select_episodes_keeps_missing_epi_num_when_no_range_set():
     episodes: list[EpisodeItem] = [
         {"episode_no": 10, "epi_num": 1, "epi_title": "One"},
-        {"episode_no": 11, "epi_num": "bad", "epi_title": "Two"},
+        {"episode_no": 11, "epi_title": "Two"},
     ]
 
     selected = select_episodes(episodes, ChapterSelection())
@@ -741,7 +741,14 @@ class MapFetchClient:
         raise AssertionError("paid parallel path should not be used for free policy tests")
 
     def fetch_episode(self, ep: EpisodeItem, idx: int = 0, ticket_data=None) -> ChapterResult:
-        epi = int(ep["episode_no"])  # type: ignore[arg-type]
+        epi = ep.get("episode_no")
+        if epi is None:
+            return {
+                "error": "missing episode_no fixture",
+                "epi_no": None,
+                "epi_title": ep.get("epi_title") or "Untitled",
+                "idx": idx,
+            }
         with self.lock:
             self.fetch_calls.append((epi, ticket_data))
         if ticket_data is not None:
@@ -750,7 +757,7 @@ class MapFetchClient:
                 return {
                     "error": "missing after-ad fixture",
                     "epi_no": epi,
-                    "epi_title": ep.get("epi_title"),
+                    "epi_title": ep.get("epi_title") or "Untitled",
                     "idx": idx,
                 }
             return {**row, "idx": idx}
@@ -767,7 +774,7 @@ class MapFetchClient:
 
 def test_fetch_chapters_free_policy_workers_unlock_ads_and_stop_at_premium(tmp_path):
     book_dir = tmp_path / "book"
-    premium = {
+    premium: ChapterResult = {
         "error": "premium episode blocked: novel_no=7 episode_no=42",
         "epi_no": 42,
         "epi_title": "Premium",
@@ -822,7 +829,7 @@ def test_fetch_chapters_free_policy_workers_match_serial_chapter_set(tmp_path):
     ]
 
     def _client() -> MapFetchClient:
-        premium = {
+        premium: ChapterResult = {
             "error": "premium episode blocked: novel_no=7 episode_no=42",
             "epi_no": 42,
             "epi_title": "Premium",

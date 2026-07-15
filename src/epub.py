@@ -35,11 +35,6 @@ class EpubClient(Protocol):
     ) -> list[ChapterResult]: ...
 
 
-# ----------------------------
-# EPUB Builder
-# ----------------------------
-
-
 def _epub_date(raw: object) -> str | None:
     """Extract a ``YYYY-MM-DD`` date from Novelpia's ``"YYYY-MM-DD HH:MM:SS"``
     timestamp for use as ``dc:date``. Returns ``None`` for missing/placeholder
@@ -75,6 +70,8 @@ class EpubBuilder:
         novel_id: int | None = None,
         fetched_results: list[ChapterResult] | None = None,
         max_workers: int = 1,
+        image_cache_dir: str | None = None,
+        chapter_images: bool = False,
     ) -> tuple[str, str, int]:
         result = novel["result"]
         nv = result["novel"]
@@ -135,10 +132,15 @@ class EpubBuilder:
         # CSS
         default_css = css_text or (
             """
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial; line-height: 1.6; }
+            body { line-height: 1.6; }
             h1, h2, h3 { page-break-after: avoid; }
+            nav h2 { font-size: 2em; }
             img { max-width: 100%; height: auto; }
             .epi-title { font-size: 1.4em; font-weight: 600; margin: 0 0 0.6em; }
+            .about-cover { float: left; margin: 0 1.2em .7em 0; }
+            .about-cover img { width: 240px; max-width: 40vw; border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+            .about-clear { clear: both; height: 0; }
             """
         )
         style = epub.EpubItem(
@@ -151,7 +153,8 @@ class EpubBuilder:
         image_adapter = EpubImageAdapter(
             self._image_fetcher,
             client,
-            embed_images=self._image_fetcher.can_fetch_chapter_images(client),
+            embed_images=chapter_images,
+            image_cache_dir=image_cache_dir,
         )
 
         if fetched_results is None:
@@ -178,7 +181,10 @@ class EpubBuilder:
             html_text = res.get("html") or ""
             epi_title = res.get("epi_title") or f"Episode {i}"
 
-            html_text, new_imgs = image_adapter.add_images_and_rewrite(html_text)
+            signed_key = res.get("signed_key")
+            html_text, new_imgs = image_adapter.add_images_and_rewrite(
+                html_text, signed_key, embed_images=bool(signed_key)
+            )
 
             chapter = epub.EpubHtml(
                 title=epi_title,
@@ -191,6 +197,7 @@ class EpubBuilder:
                     f'<body><h2 class="epi-title">{html.escape(epi_title)}</h2>{html_text}</body></html>'
                 ),
             )
+            chapter.add_item(style)
 
             book.add_item(chapter)
             spine.append(chapter)
@@ -204,9 +211,7 @@ class EpubBuilder:
         meta_parts.append(f"<h1>{html.escape(title)}</h1>")
         if has_cover:
             meta_parts.append(
-                f"<p><img src='{cover_file_name}' alt='Cover' "
-                "style='width:230px;max-width:90%;height:auto;border-radius:12px;"
-                "box-shadow:0 2px 8px rgba(0,0,0,.15)'/></p>"
+                f"<p class='about-cover'><img src='{cover_file_name}' alt='Cover'/></p>"
             )
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
@@ -217,13 +222,14 @@ class EpubBuilder:
             meta_parts.append(f"<p><strong>Source:</strong> <a href='{src_url}'>{src_url}</a></p>")
         if description:
             escaped_description = html.escape(description).replace("\n", "<br/>")
-            meta_parts.append(f"<p>{escaped_description}</p>")
+            meta_parts.append(f"<div class='about-clear'></div><p>{escaped_description}</p>")
         meta_html = (
             "<html><head><link rel='stylesheet' href='style/main.css'/></head><body>"
             + "".join(meta_parts)
             + "</body></html>"
         )
         about = epub.EpubHtml(title="About", file_name="about.xhtml", lang=language, content=meta_html)
+        about.add_item(style)
         book.add_item(about)
         spine.insert(1, about)
         toc.insert(0, about)
@@ -231,7 +237,9 @@ class EpubBuilder:
         # TOC, NCX, Nav
         book.toc = toc
         book.add_item(epub.EpubNcx())
-        book.add_item(epub.EpubNav())
+        nav = epub.EpubNav(title="Table of Contents")
+        nav.add_item(style)
+        book.add_item(nav)
 
         # Spine & CSS
         book.spine = spine

@@ -1,10 +1,6 @@
 import sys
 from pathlib import Path
 
-# ----------------------------
-# Constants
-# ----------------------------
-
 BASE_URL = "https://global.novelpia.com"
 API_BASE = "https://api-global.novelpia.com"
 IMG_BASE_HTTPS = "https:"

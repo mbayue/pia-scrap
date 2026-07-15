@@ -1,3 +1,4 @@
+import hashlib
 import requests
 
 from src.api import NovelpiaClient
@@ -87,6 +88,7 @@ def test_build_continues_when_chapter_image_fetch_fails(monkeypatch, tmp_path):
         [{"episode_no": 1, "epi_title": "One"}],
         filename_hint="Book",
         fetched_results=[{"epi_no": 1, "epi_title": "One", "html": '<p><img src="https://example.com/i.jpg"></p>'}],
+        chapter_images=True,
     )
 
     assert result == (str(tmp_path / "book" / "book.epub"), "Book", 1)
@@ -114,6 +116,7 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
         fetched_results=[
             {"epi_no": 1, "epi_title": "One", "html": '<p>before<img src="https://pv-gn.novelpia.com/i.png">after</p>'}
         ],
+        chapter_images=True,
     )
 
     chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
@@ -213,10 +216,11 @@ def test_build_falls_back_to_novel_img_when_full_img_bytes_are_not_a_real_image(
     assert cover_items[0].content == b"\xff\xd8\xffreal-jpeg-bytes"
 
 
-def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
+def test_epub_image_adapter_rewrites_and_caches_image_when_fetch_succeeds(monkeypatch, tmp_path):
     client = NovelpiaClient(throttle=0)
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse())
-    adapter = EpubImageAdapter(ImageFetcher(), client)
+    cache_dir = tmp_path / ".cache" / "images"
+    adapter = EpubImageAdapter(ImageFetcher(), client, image_cache_dir=str(cache_dir))
 
     rewritten, items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
 
@@ -224,6 +228,23 @@ def test_epub_image_adapter_rewrites_image_when_fetch_succeeds(monkeypatch):
     assert len(items) == 1
     assert items[0].file_name == "images/img_00001.png"
     assert items[0].content == b"image-bytes"
+    assert (cache_dir / f"{hashlib.sha256(b'https://global.novelpia.com/cover.png').hexdigest()}.png").read_bytes() == b"image-bytes"
+
+
+def test_epub_image_adapter_uses_cached_image_without_signed_key(monkeypatch, tmp_path):
+    src = "https://pv-gn.novelpia.com/i.png"
+    cache_dir = tmp_path / ".cache" / "images"
+    cache_dir.mkdir(parents=True)
+    image_bytes = b"\x89PNG\r\n\x1a\nimage"
+    (cache_dir / f"{hashlib.sha256(src.encode()).hexdigest()}.png").write_bytes(image_bytes)
+    client = _failing_client(monkeypatch)
+    adapter = EpubImageAdapter(ImageFetcher(), client, image_cache_dir=str(cache_dir))
+
+    rewritten, items = adapter.add_images_and_rewrite(f'<p><img src="{src}"></p>', embed_images=True)
+
+    assert 'src="images/img_00001.png"' in rewritten
+    assert len(items) == 1
+    assert items[0].content == image_bytes
 
 
 def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypatch):

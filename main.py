@@ -58,6 +58,7 @@ def main() -> None:
         "-up", dest="update", action="store_true", help="Reuse cached chapters and fetch only missing/new chapters"
     )
     ap.add_argument("-r", dest="retry_failed", action="store_true", help="Retry chapters that failed to fetch")
+    ap.add_argument("-img", dest="chapter_images", action="store_true", help="Embed chapter images in EPUB output")
     ap.add_argument("-txt", dest="txt", action="store_true", help="Output plain .txt files per episode instead of EPUB")
     args = ap.parse_args()
 

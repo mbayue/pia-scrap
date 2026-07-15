@@ -134,11 +134,34 @@ def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch)
         jobs.clear()
 
 
+def test_create_job_rejects_invalid_options_before_starting_worker(monkeypatch):
+    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    _drain_semaphore()
+    with jobs_lock:
+        jobs.clear()
+
+    try:
+        create_job(JobRequest(novel_text="5522", workers=0))
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert exc.detail == "-w/--workers must be at least 1"
+    else:
+        raise AssertionError("expected HTTPException")
+    with jobs_lock:
+        jobs.clear()
+
+
 def test_index_serves_template_html():
     html = index()
 
     assert "<title>PIA Scrap</title>" in html
     assert 'id="job-form"' in html
+
+
+def web_app_routes():
+    from web_app import app
+
+    return app.routes
 
 
 def test_list_jobs_returns_all_jobs(monkeypatch):
