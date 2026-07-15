@@ -43,6 +43,7 @@ dev = [
     "ruff>=0.5,<1",
     "mypy>=1.10,<2",
     "types-beautifulsoup4",
+    "types-requests",
 ]
 
 [tool.setuptools.packages.find]
@@ -82,6 +83,8 @@ quote-style = "double"
 
 [tool.mypy]
 python_version = "3.10"
+explicit_package_bases = true
+mypy_path = ["."]
 strict = false
 warn_unused_configs = true
 warn_redundant_casts = true

@@ -183,7 +183,7 @@ class EpubBuilder:
 
             signed_key = res.get("signed_key")
             html_text, new_imgs = image_adapter.add_images_and_rewrite(
-                html_text, signed_key, embed_images=bool(signed_key)
+                html_text, signed_key
             )
 
             chapter = epub.EpubHtml(

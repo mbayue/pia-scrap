@@ -7,7 +7,6 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -338,26 +337,36 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
                 log(f"[queue] ({idx}/{total}) Building novel {novel_id}")
 
             try:
-                builder_fn = build_txt if options.txt else build_epub
                 fmt_label = "TXT" if options.txt else "EPUB"
-                build_kwargs = {
-                    "start_chapter": options.start_chapter,
-                    "end_chapter": options.end_chapter,
-                    "max_chapters": max_chapters,
-                    "language": options.lang,
-                    "debug_dump": options.debug,
-                    "update": options.update,
-                    "retry_failed": options.retry_failed,
-                    "max_workers": options.workers,
-                }
-                if not options.txt:
-                    build_kwargs["chapter_images"] = options.chapter_images
-                out_result, title, count = builder_fn(
-                    client,
-                    novel_id,
-                    options.out,
-                    **cast(Any, build_kwargs),
-                )
+                if options.txt:
+                    out_result, title, count = build_txt(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                    )
+                else:
+                    out_result, title, count = build_epub(
+                        client,
+                        novel_id,
+                        options.out,
+                        start_chapter=options.start_chapter,
+                        end_chapter=options.end_chapter,
+                        max_chapters=max_chapters,
+                        language=options.lang,
+                        debug_dump=options.debug,
+                        update=options.update,
+                        retry_failed=options.retry_failed,
+                        max_workers=options.workers,
+                        chapter_images=options.chapter_images,
+                    )
                 if out_result is None:
                     reason = "No failed chapters to retry" if options.retry_failed else "No updates found"
                     log(f"[info] {reason} for '{title}'. Existing {fmt_label} left unchanged.")

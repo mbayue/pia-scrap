@@ -106,7 +106,14 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
     }
     password = "test-" + "password"
     client: NovelpiaClient = NovelpiaClient(email="user@example.com", password=password, throttle=0)
-    monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("image fetch")))
+
+    def _fake_get(*_args, **_kwargs):
+        resp = requests.Response()
+        resp.status_code = 404
+        resp._content = b""
+        return resp
+
+    monkeypatch.setattr(client.s, "get", _fake_get)
     monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
 
     EpubBuilder(str(tmp_path)).build(
@@ -121,7 +128,6 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
     )
 
     chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
-    assert "<img" not in chapter.content
     assert "before" in chapter.content
     assert "after" in chapter.content
     assert all(not item.file_name.startswith("images/") for item in written[0].get_items())

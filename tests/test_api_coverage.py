@@ -96,7 +96,33 @@ def test_parse_edges_full_shapes():
 
     with pytest.raises(ApiShapeError, match=r"integer at \$\.result\.list\[0\]\.epi_num"):
         parse_episode_list_response(
-            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": "1", "epi_num": "x"}]}})
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": 1, "epi_num": "x"}]}})
+        )
+
+
+def test_parse_novel_no_rejects_non_int():
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(
+            Response(payload={"result": {"novel": {"novel_no": True, "novel_name": "X"}}})
+        )
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(
+            Response(payload={"result": {"novel": {"novel_no": 5.5, "novel_name": "X"}}})
+        )
+    with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
+        parse_novel_response(
+            Response(payload={"result": {"novel": {"novel_no": "123", "novel_name": "X"}}})
+        )
+
+
+def test_parse_episode_no_rejects_non_int():
+    with pytest.raises(ApiShapeError, match=r"integer.*episode_no"):
+        parse_episode_list_response(
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": "1", "epi_num": 1}]}})
+        )
+    with pytest.raises(ApiShapeError, match=r"integer.*epi_num"):
+        parse_episode_list_response(
+            Response(payload={"result": {"list": [{"epi_title": "T", "episode_no": 1, "epi_num": True}]}})
         )
 
     content = parse_episode_content_response(

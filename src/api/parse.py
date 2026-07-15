@@ -108,10 +108,9 @@ def parse_novel_response(response: ResponseLike) -> NovelResponse:
             novel[key] = value
     novel_no_raw = novel_body.get("novel_no")
     if novel_no_raw is not None:
-        try:
-            novel["novel_no"] = int(novel_no_raw)
-        except (ValueError, TypeError) as err:
-            raise ApiShapeError("novel response", "$.result.novel.novel_no", "integer") from err
+        if not isinstance(novel_no_raw, int) or isinstance(novel_no_raw, bool):
+            raise ApiShapeError("novel response", "$.result.novel.novel_no", "integer")
+        novel["novel_no"] = novel_no_raw
     tag_list = novel_body.get("tag_list")
     if isinstance(tag_list, list):
         novel["tag_list"] = tag_list
@@ -148,10 +147,9 @@ def parse_episode_list_response(response: ResponseLike) -> EpisodeListResponse:
         for key in ("episode_no", "epi_num"):
             raw = row.get(key)
             if raw is not None:
-                try:
-                    episode[key] = int(raw)
-                except (ValueError, TypeError) as err:
-                    raise ApiShapeError("episode list response", f"$.result.list[{index}].{key}", "integer") from err
+                if not isinstance(raw, int) or isinstance(raw, bool):
+                    raise ApiShapeError("episode list response", f"$.result.list[{index}].{key}", "integer")
+                episode[key] = raw
         episodes.append(episode)
     typed_result: EpisodeListResult = {"list": episodes}
     return {"result": typed_result}

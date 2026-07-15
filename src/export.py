@@ -35,6 +35,7 @@ SIGNED_POLICY_COOKIE_KEYS = {"Policy", "Expires"}
 IMAGE_MAX_RETRIES = 3
 IMAGE_429_BACKOFF_SECONDS = 2.0
 IMAGE_RETRY_DELAY_SECONDS = 1.0
+TRUSTED_IMAGE_HOSTS = {"pv-gn.novelpia.com", "images.novelpia.com"}
 
 # Magic-byte signatures for image sniffing. Some hosts (e.g. Novelpia's cover
 # CDN) serve real images with a generic ``Content-Type: application/octet-stream``
@@ -109,7 +110,7 @@ class ImageFetcher:
     ) -> tuple[bytes, str] | None:
         if signed_key:
             host = urlparse(url).hostname
-            if host:
+            if host and host in TRUSTED_IMAGE_HOSTS:
                 for name in ("CloudFront-Policy", "CloudFront-Key-Pair-Id", "CloudFront-Signature"):
                     if signed_key.get(name):
                         client.s.cookies.set(name, signed_key[name], domain=host, path="/")
@@ -189,9 +190,9 @@ class EpubImageAdapter:
     def _cache_image(self, src: str, content: bytes, ext: str) -> None:
         if not self.image_cache_dir:
             return
-        os.makedirs(self.image_cache_dir, exist_ok=True)
         path = os.path.join(self.image_cache_dir, f"{hashlib.sha256(src.encode('utf-8')).hexdigest()}{ext}")
         try:
+            os.makedirs(self.image_cache_dir, exist_ok=True)
             with open(path, "wb") as handle:
                 handle.write(content)
         except OSError as exc:
