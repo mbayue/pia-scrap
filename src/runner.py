@@ -6,8 +6,8 @@ import re
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, cast
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
