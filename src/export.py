@@ -221,8 +221,7 @@ class EpubImageAdapter:
             if fetched is None and embed_images and signed_key:
                 fetched = self.fetcher.fetch_image(self.client, src, signed_key)
             if fetched is None:
-                if not embed_images:
-                    img.decompose()
+                img.decompose()
                 continue
             img_bytes, ext = fetched
             self._cache_image(src, img_bytes, ext)

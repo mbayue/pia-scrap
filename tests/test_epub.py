@@ -275,13 +275,13 @@ def test_epub_image_adapter_returns_fragment_without_html_body_wrappers(monkeypa
     assert rewritten.startswith("<p>")
 
 
-def test_epub_image_adapter_preserves_external_image_when_fetch_fails(monkeypatch):
+def test_epub_image_adapter_strips_image_when_fetch_fails(monkeypatch):
     monkeypatch.setattr("src.export.time.sleep", lambda _seconds: None)
     adapter = EpubImageAdapter(ImageFetcher(), _failing_client(monkeypatch))
 
     rewritten, items = adapter.add_images_and_rewrite('<p><img src="https://example.com/missing.jpg"></p>')
 
-    assert 'src="https://example.com/missing.jpg"' in rewritten
+    assert "<img" not in rewritten
     assert items == []
 
 
