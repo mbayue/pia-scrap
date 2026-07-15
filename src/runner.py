@@ -6,6 +6,7 @@ import re
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Any, cast
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -355,7 +356,7 @@ def run_queue(novel_ids: Iterable[int], options: QueueOptions, log: LogFn = prin
                     client,
                     novel_id,
                     options.out,
-                    **build_kwargs,
+                    **cast(Any, build_kwargs),
                 )
                 if out_result is None:
                     reason = "No failed chapters to retry" if options.retry_failed else "No updates found"

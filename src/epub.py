@@ -210,9 +210,7 @@ class EpubBuilder:
         meta_parts = []
         meta_parts.append(f"<h1>{html.escape(title)}</h1>")
         if has_cover:
-            meta_parts.append(
-                f"<p class='about-cover'><img src='{cover_file_name}' alt='Cover'/></p>"
-            )
+            meta_parts.append(f"<p class='about-cover'><img src='{cover_file_name}' alt='Cover'/></p>")
         meta_parts.append(f"<p><strong>Author:</strong> {html.escape(author)}</p>")
         meta_parts.append(f"<p><strong>Chapters:</strong> {len(episodes)}</p>")
         meta_parts.append(f"<p><strong>Status:</strong> {html.escape(status)}</p>")

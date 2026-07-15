@@ -59,14 +59,17 @@ class Session(requests.Session):
         *args: Any,
         **kwargs: Any,
     ) -> requests.Response:
-        self.calls.append((
-            method, url,
-            kwargs.get("headers"),
-            kwargs.get("params"),
-            kwargs.get("json"),
-            kwargs.get("data"),
-            kwargs.get("timeout"),
-        ))
+        self.calls.append(
+            (
+                method,
+                url,
+                kwargs.get("headers"),
+                kwargs.get("params"),
+                kwargs.get("json"),
+                kwargs.get("data"),
+                kwargs.get("timeout"),
+            )
+        )
         item = self.responses.pop(0)
         if isinstance(item, Exception):
             raise item

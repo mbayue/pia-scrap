@@ -15,6 +15,7 @@ from src.logutil import get_logger
 
 logger = get_logger(__name__)
 
+
 def extract_genre_names(novel: Mapping[str, Any]) -> list[str]:
     """Extract unique genre/tag names from a NovelResponse."""
     result = novel.get("result", {})
