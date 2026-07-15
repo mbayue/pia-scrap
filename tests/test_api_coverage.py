@@ -102,17 +102,11 @@ def test_parse_edges_full_shapes():
 
 def test_parse_novel_no_rejects_non_int():
     with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
-        parse_novel_response(
-            Response(payload={"result": {"novel": {"novel_no": True, "novel_name": "X"}}})
-        )
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": True, "novel_name": "X"}}}))
     with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
-        parse_novel_response(
-            Response(payload={"result": {"novel": {"novel_no": 5.5, "novel_name": "X"}}})
-        )
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": 5.5, "novel_name": "X"}}}))
     with pytest.raises(ApiShapeError, match=r"integer.*novel_no"):
-        parse_novel_response(
-            Response(payload={"result": {"novel": {"novel_no": "123", "novel_name": "X"}}})
-        )
+        parse_novel_response(Response(payload={"result": {"novel": {"novel_no": "123", "novel_name": "X"}}}))
 
 
 def test_parse_episode_no_rejects_non_int():

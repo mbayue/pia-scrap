@@ -109,8 +109,9 @@ class ImageFetcher:
         self, client: ImageClient, url: str, signed_key: dict[str, str] | None = None
     ) -> tuple[bytes, str] | None:
         if signed_key:
-            host = urlparse(url).hostname
-            if host and host in TRUSTED_IMAGE_HOSTS:
+            parsed = urlparse(url)
+            host = parsed.hostname
+            if host and host in TRUSTED_IMAGE_HOSTS and parsed.scheme == "https":
                 for name in ("CloudFront-Policy", "CloudFront-Key-Pair-Id", "CloudFront-Signature"):
                     if signed_key.get(name):
                         client.s.cookies.set(name, signed_key[name], domain=host, path="/")
@@ -217,7 +218,7 @@ class EpubImageAdapter:
                 continue
 
             fetched = self._cached_image(src) if embed_images else None
-            if fetched is None and embed_images:
+            if fetched is None and embed_images and signed_key:
                 fetched = self.fetcher.fetch_image(self.client, src, signed_key)
             if fetched is None:
                 if not embed_images:

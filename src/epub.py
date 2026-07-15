@@ -182,9 +182,7 @@ class EpubBuilder:
             epi_title = res.get("epi_title") or f"Episode {i}"
 
             signed_key = res.get("signed_key")
-            html_text, new_imgs = image_adapter.add_images_and_rewrite(
-                html_text, signed_key
-            )
+            html_text, new_imgs = image_adapter.add_images_and_rewrite(html_text, signed_key)
 
             chapter = epub.EpubHtml(
                 title=epi_title,

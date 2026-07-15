@@ -107,13 +107,16 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
     password = "test-" + "password"
     client: NovelpiaClient = NovelpiaClient(email="user@example.com", password=password, throttle=0)
 
-    def _fake_get(*_args, **_kwargs):
+    get_calls: list[tuple] = []
+
+    def _track_get(*args, **kwargs):
+        get_calls.append((args, kwargs))
         resp = requests.Response()
         resp.status_code = 404
         resp._content = b""
         return resp
 
-    monkeypatch.setattr(client.s, "get", _fake_get)
+    monkeypatch.setattr(client.s, "get", _track_get)
     monkeypatch.setattr("src.epub.epub.write_epub", lambda _path, book, _opts: written.append(book))
 
     EpubBuilder(str(tmp_path)).build(
@@ -126,6 +129,8 @@ def test_build_strips_chapter_images_without_cloudfront_cookies(monkeypatch, tmp
         ],
         chapter_images=True,
     )
+
+    assert get_calls == [], "chapter image fetch should not be attempted without CloudFront cookies"
 
     chapter = next(item for item in written[0].get_items() if item.file_name == "chap_0001.xhtml")
     assert "before" in chapter.content
@@ -229,7 +234,10 @@ def test_epub_image_adapter_rewrites_and_caches_image_when_fetch_succeeds(monkey
     cache_dir = tmp_path / ".cache" / "images"
     adapter = EpubImageAdapter(ImageFetcher(), client, image_cache_dir=str(cache_dir))
 
-    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/cover.png"></p>')
+    rewritten, items = adapter.add_images_and_rewrite(
+        '<p><img src="/cover.png"></p>',
+        signed_key={"CloudFront-Policy": "p", "CloudFront-Key-Pair-Id": "k", "CloudFront-Signature": "s"},
+    )
 
     assert 'src="images/img_00001.png"' in rewritten
     assert len(items) == 1
@@ -300,7 +308,10 @@ def test_epub_image_adapter_derives_extension_for_unsupported_image_url(monkeypa
     monkeypatch.setattr(client.s, "get", lambda *_args, **_kwargs: OkResponse({"Content-Type": "image/png"}))
     adapter = EpubImageAdapter(ImageFetcher(), client)
 
-    rewritten, items = adapter.add_images_and_rewrite('<p><img src="/file.bin"></p>')
+    rewritten, items = adapter.add_images_and_rewrite(
+        '<p><img src="/file.bin"></p>',
+        signed_key={"CloudFront-Policy": "p", "CloudFront-Key-Pair-Id": "k", "CloudFront-Signature": "s"},
+    )
 
     assert 'src="images/img_00001.png"' in rewritten
     assert len(items) == 1
