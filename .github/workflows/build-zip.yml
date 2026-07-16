@@ -44,10 +44,10 @@ jobs:
         run: pip install ruff
 
       - name: Run ruff check
-        run: ruff check src/ tests/ web_app.py main.py
+        run: ruff check src/ tests/ web/ gui/ main.py
 
       - name: Run ruff format check
-        run: ruff format --check src/ tests/ web_app.py main.py
+        run: ruff format --check src/ tests/ web/ gui/ main.py
 
   build:
     name: Build ${{ matrix.name }} zip
@@ -60,9 +60,23 @@ jobs:
           - name: linux
             os: ubuntu-latest
             executable: pia-scrap
+            spec: pia-scrap.spec
+            requirements: requirements.txt
           - name: windows
             os: windows-latest
             executable: pia-scrap.exe
+            spec: pia-scrap.spec
+            requirements: requirements.txt
+          - name: gui-linux
+            os: ubuntu-latest
+            executable: pia-scrap-gui
+            spec: pia-scrap-gui.spec
+            requirements: requirements-gui.txt
+          - name: gui-windows
+            os: windows-latest
+            executable: pia-scrap-gui.exe
+            spec: pia-scrap-gui.spec
+            requirements: requirements-gui.txt
 
     steps:
       - name: Check out repository
@@ -74,11 +88,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Install Linux system dependencies (GUI only)
+        if: runner.os == 'Linux' && contains(matrix.name, 'gui')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libnotify-dev libsdl2-dev libxtst-dev
+
       - name: Install build dependencies
-        run: python -m pip install -r requirements.txt pyinstaller
+        run: python -m pip install -r ${{ matrix.requirements }} pyinstaller
 
       - name: Build executable
-        run: pyinstaller --clean --noconfirm pia-scrap.spec
+        run: pyinstaller --clean --noconfirm ${{ matrix.spec }}
 
       - name: Package zip
         shell: python

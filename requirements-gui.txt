@@ -1,0 +1,9 @@
+beautifulsoup4==4.12.*
+ebooklib==0.18
+requests==2.32.*
+tqdm==4.66.*
+python-dotenv==1.0.*
+PySocks==1.7.*
+lxml==5.2.*
+typing_extensions==4.16.*
+Gooey>=1.0.8.1
