@@ -8,7 +8,7 @@ Create EPUB or TXT output from Novelpia novels using Novelpia's API. Given one o
 
 ## What's new in 2.9.0
 
-* Desktop GUI client (run with `--gui`) featuring a polished interface, start/stop task controls, and custom layouts.
+* Desktop GUI client (run with `--gui`) with start/stop task controls, layout padding, and custom program icon.
 * Consolidated `main.py` entrypoint (installed as the `pia` command) supporting CLI, `--gui`, and `--web` modes.
 * Reorganized file structure separating client scripts into `gui/` and `web/` folders.
 

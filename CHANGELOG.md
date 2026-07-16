@@ -6,9 +6,9 @@ This file records notable PIA Scrap changes.
 
 ### Added
 
-- Desktop GUI client (`pia --gui`) using Gooey, featuring automatic theme alignment, custom styling, and layout controls.
+- Desktop GUI client (`pia --gui`) using Gooey with window sizing, start/stop controls, and custom icon support.
 - Consolidated `main.py` entrypoint (pip-exposed as the `pia` command) supporting CLI, `--gui`, and `--web` modes.
-- Explicit PyInstaller spec settings to bundle the GUI's `languages` and `assets` assets.
+- Explicit PyInstaller spec settings to bundle the GUI's `languages` and `assets` folders.
 
 ### Changed
 
