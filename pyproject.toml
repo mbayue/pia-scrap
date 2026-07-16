@@ -52,8 +52,11 @@ dev = [
 [project.scripts]
 pia = "main:main"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "gui*", "web*"]
+
 [tool.setuptools]
-packages = ["src", "gui", "web"]
 py-modules = ["main"]
 
 [tool.setuptools.package-data]

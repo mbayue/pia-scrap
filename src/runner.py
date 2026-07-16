@@ -109,9 +109,7 @@ def validate_queue_options(options: QueueOptions) -> None:
         raise CliUsageError("-start must be less than or equal to -end")
 
 
-def _parse_novel_token(item: str | int) -> int:
-    if isinstance(item, int):
-        return item
+def _parse_novel_token(item: str) -> int:
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
     if match:
         return int(match.group(1))
@@ -139,7 +137,7 @@ def load_queue_file(path: str) -> list[int]:
 
 def build_queue_request(args: argparse.Namespace) -> QueueRequest:
     try:
-        novel_ids = [_parse_novel_token(item) for item in args.novel_ids]
+        novel_ids = [_parse_novel_token(str(item)) for item in args.novel_ids]
     except ValueError as e:
         raise CliUsageError(f"invalid novel_id or novel URL: {e}") from None
     for queue_path in args.queue:
