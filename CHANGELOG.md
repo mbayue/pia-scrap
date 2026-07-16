@@ -2,6 +2,12 @@
 
 This file records notable PIA Scrap changes.
 
+## [2.9.1] - 2026-07-16
+
+### Fixed
+
+- PyInstaller asset path resolution when packaged as an executable (fixed Gooey missing translation/language file).
+
 ## [2.9.0] - 2026-07-16
 
 ### Added
