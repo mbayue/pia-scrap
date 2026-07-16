@@ -109,7 +109,9 @@ def validate_queue_options(options: QueueOptions) -> None:
         raise CliUsageError("-start must be less than or equal to -end")
 
 
-def _parse_novel_token(item: str) -> int:
+def _parse_novel_token(item: str | int) -> int:
+    if isinstance(item, int):
+        return item
     match = re.search(r"(?:^|/)novel/(\d+)(?:\D|$)", item)
     if match:
         return int(match.group(1))
