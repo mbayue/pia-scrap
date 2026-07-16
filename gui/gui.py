@@ -116,12 +116,13 @@ def patched_app_layout(self):
     self.Layout()
     if self.buildSpec.get("fullscreen", True):
         self.ShowFullScreen(True)
-    icon_path = get_resource_path("program_icon.png")
-    if not os.path.exists(icon_path):
-        icon_path = get_resource_path(os.path.join("assets", "program_icon.png"))
+    ico_path = get_resource_path(os.path.join("assets", "program_icon.ico"))
+    png_path = get_resource_path(os.path.join("assets", "program_icon.png"))
 
-    if os.path.exists(icon_path):
-        icon = wx.Icon(icon_path, wx.BITMAP_TYPE_PNG)
+    if sys.platform == "win32" and os.path.exists(ico_path):
+        icon = wx.Icon(ico_path, wx.BITMAP_TYPE_ICO)
+    elif os.path.exists(png_path):
+        icon = wx.Icon(png_path, wx.BITMAP_TYPE_PNG)
     else:
         icon = wx.Icon(self.buildSpec["images"]["programIcon"], wx.BITMAP_TYPE_PNG)
     self.SetIcon(icon)

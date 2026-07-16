@@ -16,6 +16,10 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+import os
+
+icon_file = 'gui/assets/program_icon.ico' if os.path.exists('gui/assets/program_icon.ico') else None
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -35,4 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=icon_file,
 )
