@@ -81,6 +81,12 @@ def patched_on_close(self, *args, **kwargs):
 GooeyApplication.onClose = patched_on_close
 
 
+def get_resource_path(relative_path):
+    if getattr(sys, "frozen", False):
+        return os.path.join(sys._MEIPASS, "gui", relative_path)
+    return os.path.join(os.path.dirname(__file__), relative_path)
+
+
 def patched_tabbar_layout(self):
     for group, panel in zip(self.options, self.configPanels, strict=False):
         panel.Reparent(self.notebook)
@@ -110,9 +116,9 @@ def patched_app_layout(self):
     self.Layout()
     if self.buildSpec.get("fullscreen", True):
         self.ShowFullScreen(True)
-    icon_path = os.path.join(os.path.dirname(__file__), "program_icon.png")
+    icon_path = get_resource_path("program_icon.png")
     if not os.path.exists(icon_path):
-        icon_path = os.path.join(os.path.dirname(__file__), "assets", "program_icon.png")
+        icon_path = get_resource_path(os.path.join("assets", "program_icon.png"))
 
     if os.path.exists(icon_path):
         icon = wx.Icon(icon_path, wx.BITMAP_TYPE_PNG)
@@ -137,7 +143,7 @@ GooeyApplication.layoutComponent = patched_app_layout
     footer_bg_color="#e0e0e0",
     clear_before_run=True,
     show_restart_button=False,
-    language_dir=os.path.join(os.path.dirname(__file__), "languages"),
+    language_dir=get_resource_path("languages"),
     progress_regex=r"^progress: (\d+)%",
     hide_progress_msg=True,
 )
