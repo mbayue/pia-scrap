@@ -3,15 +3,15 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import gooey.gui.components.footer as gooey_footer
 import tqdm
 import wx
-from wx.adv import TaskBarIcon
 from gooey import Gooey, GooeyParser
-import gooey.gui.components.footer as gooey_footer
 from gooey.gui.components import modals
-from gooey.gui.containers.application import GooeyApplication
 from gooey.gui.components.tabbar import Tabbar
+from gooey.gui.containers.application import GooeyApplication
 from gooey.gui.util import wx_util
+from wx.adv import TaskBarIcon
 
 from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
 
