@@ -2,7 +2,10 @@ import argparse
 import os
 import sys
 
-from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+if sys.stderr is not None:
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
 
 
 def should_pause_on_usage_error(argv: list[str], is_frozen: bool, os_name: str) -> bool:
@@ -77,6 +80,8 @@ def main() -> None:
     args = ap.parse_args()
 
     try:
+        from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
+
         request = build_queue_request(args)
     except CliUsageError as e:
         if should_pause_on_usage_error(sys.argv, bool(getattr(sys, "frozen", False)), os.name):

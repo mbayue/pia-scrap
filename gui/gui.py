@@ -1,22 +1,22 @@
 import os
 import sys
 
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+if sys.stderr is not None:
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import gooey.gui.components.footer as gooey_footer
 import tqdm
-import wx
 from gooey import Gooey, GooeyParser
-from gooey.gui.components import modals
-from gooey.gui.components.tabbar import Tabbar
-from gooey.gui.containers.application import GooeyApplication
-from gooey.gui.util import wx_util
-from wx.adv import TaskBarIcon
 
 if os.environ.get("GOOEY") == "1":
 
     class PatchedTqdm(tqdm.tqdm):
         def __init__(self, *args, **kwargs):
+            sys.stdout.write("[debug] PatchedTqdm instantiated\n")
+            sys.stdout.flush()
             class DummyFile:
                 def write(self, x):
                     pass
@@ -41,97 +41,112 @@ if os.environ.get("GOOEY") == "1":
                 sys.stdout.flush()
 
     tqdm.tqdm = PatchedTqdm
+    for name, module in list(sys.modules.items()):
+        if name.startswith("tqdm"):
+            if hasattr(module, "tqdm") and module.tqdm is not PatchedTqdm:
+                try:
+                    module.tqdm = PatchedTqdm
+                except AttributeError:
+                    pass
+
 
 # fmt: skip
 from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue  # noqa: E402
 
-original_init = gooey_footer.Footer.__init__
-
-
-def patched_init(self, *args, **kwargs):
-    original_init(self, *args, **kwargs)
-    if self.cancel_button:
-        self.cancel_button.Hide()
-
-
-gooey_footer.Footer.__init__ = patched_init
-
-original_show_buttons = gooey_footer.Footer.showButtons
-
-
-def patched_show_buttons(self, *buttons_to_show):
-    buttons = [b for b in buttons_to_show if b not in ("cancel_button", "close_button")]
-    original_show_buttons(self, *buttons)
-
-
-gooey_footer.Footer.showButtons = patched_show_buttons
-
-original_on_close = GooeyApplication.onClose
-
-
-def patched_on_close(self, *args, **kwargs):
-    is_wx_close_event = len(args) > 0 and isinstance(args[0], wx.Event)
-    if is_wx_close_event and not self.clientRunner.running():
-        if modals.confirmExit():
-            self.destroyGooey()
-    else:
-        original_on_close(self, *args, **kwargs)
-
-
-GooeyApplication.onClose = patched_on_close
-
 
 def get_resource_path(relative_path):
     if getattr(sys, "frozen", False):
-        return os.path.join(getattr(sys, "_MEIPASS"), "gui", relative_path)
+        return os.path.join(sys._MEIPASS, "gui", relative_path)  # type: ignore[attr-defined]
     return os.path.join(os.path.dirname(__file__), relative_path)
 
 
-def patched_tabbar_layout(self):
-    for group, panel in zip(self.options, self.configPanels, strict=False):
-        panel.Reparent(self.notebook)
-        self.notebook.AddPage(panel, group)
-        self.notebook.Layout()
+if "--ignore-gooey" not in sys.argv:
+    import gooey.gui.components.footer as gooey_footer
+    import wx
+    from gooey.gui.components import modals
+    from gooey.gui.components.tabbar import Tabbar
+    from gooey.gui.containers.application import GooeyApplication
+    from gooey.gui.util import wx_util
+    from wx.adv import TaskBarIcon
 
-    sizer = wx.BoxSizer(wx.VERTICAL)
-    sizer.Add(self.notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
-    self.SetSizer(sizer)
-    self.Layout()
+    original_init = gooey_footer.Footer.__init__
+
+    def patched_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        if self.cancel_button:
+            self.cancel_button.Hide()
+
+    gooey_footer.Footer.__init__ = patched_init
+
+    original_show_buttons = gooey_footer.Footer.showButtons
+
+    def patched_show_buttons(self, *buttons_to_show):
+        buttons = [b for b in buttons_to_show if b not in ("cancel_button", "close_button")]
+        original_show_buttons(self, *buttons)
+
+    gooey_footer.Footer.showButtons = patched_show_buttons
+
+    original_on_close = GooeyApplication.onClose
+
+    def patched_on_close(self, *args, **kwargs):
+        is_wx_close_event = len(args) > 0 and isinstance(args[0], wx.Event)
+        if is_wx_close_event and not self.clientRunner.running():
+            if modals.confirmExit():
+                self.destroyGooey()
+        else:
+            original_on_close(self, *args, **kwargs)
+
+    GooeyApplication.onClose = patched_on_close
+
+    def patched_tabbar_layout(self):
+        for group, panel in zip(self.options, self.configPanels, strict=False):
+            panel.Reparent(self.notebook)
+            self.notebook.AddPage(panel, group)
+            self.notebook.Layout()
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.notebook, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
+        self.SetSizer(sizer)
+        self.Layout()
+
+    Tabbar.layoutComponent = patched_tabbar_layout
+
+    def patched_app_layout(self):
+        self.header.Hide()
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.navbar, 1, wx.EXPAND)
+        sizer.Add(self.console, 1, wx.EXPAND)
+        sizer.Add(wx_util.horizontal_rule(self), 0, wx.EXPAND)
+        sizer.Add(self.footer, 0, wx.EXPAND)
+        self.SetMinSize((400, 300))
+        self.SetSize(self.buildSpec["default_size"])
+        self.SetSizer(sizer)
+        self.console.Hide()
+        self.Layout()
+        if self.buildSpec.get("fullscreen", True):
+            self.ShowFullScreen(True)
+        ico_path = get_resource_path(os.path.join("assets", "program_icon.ico"))
+        png_path = get_resource_path(os.path.join("assets", "program_icon.png"))
+
+        if sys.platform == "win32" and os.path.exists(ico_path):
+            icon = wx.Icon(ico_path, wx.BITMAP_TYPE_ICO)
+        elif os.path.exists(png_path):
+            icon = wx.Icon(png_path, wx.BITMAP_TYPE_PNG)
+        else:
+            icon = wx.Icon(self.buildSpec["images"]["programIcon"], wx.BITMAP_TYPE_PNG)
+        self.SetIcon(icon)
+        if sys.platform != "win32":
+            self.taskbarIcon = TaskBarIcon(iconType=wx.adv.TBI_DOCK)
+            self.taskbarIcon.SetIcon(icon)
+
+    GooeyApplication.layoutComponent = patched_app_layout
 
 
-Tabbar.layoutComponent = patched_tabbar_layout
-
-
-def patched_app_layout(self):
-    self.header.Hide()
-    sizer = wx.BoxSizer(wx.VERTICAL)
-    sizer.Add(self.navbar, 1, wx.EXPAND)
-    sizer.Add(self.console, 1, wx.EXPAND)
-    sizer.Add(wx_util.horizontal_rule(self), 0, wx.EXPAND)
-    sizer.Add(self.footer, 0, wx.EXPAND)
-    self.SetMinSize((400, 300))
-    self.SetSize(self.buildSpec["default_size"])
-    self.SetSizer(sizer)
-    self.console.Hide()
-    self.Layout()
-    if self.buildSpec.get("fullscreen", True):
-        self.ShowFullScreen(True)
-    ico_path = get_resource_path(os.path.join("assets", "program_icon.ico"))
-    png_path = get_resource_path(os.path.join("assets", "program_icon.png"))
-
-    if sys.platform == "win32" and os.path.exists(ico_path):
-        icon = wx.Icon(ico_path, wx.BITMAP_TYPE_ICO)
-    elif os.path.exists(png_path):
-        icon = wx.Icon(png_path, wx.BITMAP_TYPE_PNG)
-    else:
-        icon = wx.Icon(self.buildSpec["images"]["programIcon"], wx.BITMAP_TYPE_PNG)
-    self.SetIcon(icon)
-    if sys.platform != "win32":
-        self.taskbarIcon = TaskBarIcon(iconType=wx.adv.TBI_DOCK)
-        self.taskbarIcon.SetIcon(icon)
-
-
-GooeyApplication.layoutComponent = patched_app_layout
+if getattr(sys, "frozen", False):
+    gooey_target = None
+else:
+    main_path = os.path.abspath(__file__)
+    gooey_target = f'"{sys.executable}" -u "{main_path}"'
 
 
 @Gooey(
@@ -144,6 +159,7 @@ GooeyApplication.layoutComponent = patched_app_layout
     footer_bg_color="#e0e0e0",
     clear_before_run=True,
     show_restart_button=False,
+    target=gooey_target,
     language_dir=get_resource_path("languages"),
     progress_regex=r"^progress: (\d+)%",
     hide_progress_msg=True,
@@ -153,10 +169,12 @@ def main() -> None:
 
     main_group = ap.add_argument_group("  Main  ")
     main_group.add_argument(
-        "novel_ids",
+        "--novel_ids",
+        dest="novel_ids",
         metavar="Novel URL / ID",
         type=str,
         nargs="*",
+        default=[],
         help="e.g., 5522 or https://global.novelpia.com/novel/5522",
     )
     main_group.add_argument(

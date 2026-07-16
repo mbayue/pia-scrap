@@ -125,7 +125,7 @@ def test_main_merges_cli_and_queue_options(monkeypatch, tmp_path):
             secret,
         ],
     )
-    monkeypatch.setattr("main.run_queue", fake_run_queue)
+    monkeypatch.setattr("src.runner.run_queue", fake_run_queue)
 
     main.main()
 

@@ -2,11 +2,15 @@
 
 This file records notable PIA Scrap changes.
 
-## [2.9.1] - 2026-07-16
+## [2.9.2] - 2026-07-16
 
 ### Fixed
 
 - PyInstaller asset path resolution when packaged as an executable (fixed Gooey missing translation/language file).
+- Subprocess exit hang in GUI mode by dynamically importing `wxPython` only when rendering the UI.
+- Real-time stream logging output in the Gooey console by reconfiguring standard streams to unbuffered UTF-8 mode.
+- Optional positional `novel_ids` argument in GUI to allow launching without specifying a single novel ID when using a queue file.
+- Corrected test mock target paths in `tests/test_runner.py` to support local import structure.
 
 ## [2.9.0] - 2026-07-16
 
