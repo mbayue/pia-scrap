@@ -39,6 +39,7 @@ class _TqdmAwareStreamHandler(logging.StreamHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             tqdm.write(self.format(record), file=sys.stdout)
+            sys.stdout.flush()
         except Exception:  # noqa: BLE001 - match logging.Handler's own error policy
             self.handleError(record)
 

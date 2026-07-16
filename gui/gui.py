@@ -44,9 +44,9 @@ if os.environ.get("GOOEY") == "1":
     tqdm.tqdm = PatchedTqdm
     for name, module in list(sys.modules.items()):
         if name.startswith("tqdm"):
-            if hasattr(module, "tqdm") and getattr(module, "tqdm") is not PatchedTqdm:
+            if hasattr(module, "tqdm") and getattr(module, "tqdm") is not PatchedTqdm:  # noqa: B009
                 try:
-                    setattr(module, "tqdm", PatchedTqdm)
+                    setattr(module, "tqdm", PatchedTqdm)  # noqa: B010
                 except AttributeError:
                     pass
 
