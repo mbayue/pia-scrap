@@ -94,44 +94,9 @@ This registers the global **`pia`** script command inside your active virtual en
 
 ---
 
-## Prebuilt release zips
+## Prebuilt releases
 
-Tagged releases include:
-
-* `pia-scrap-linux.zip`
-* `pia-scrap-windows.zip`
-* `pia-scrap-gui-linux.zip`
-* `pia-scrap-gui-windows.zip`
-
-Each zip contains the executable, `README.md`, and `.env.example`. Copy `.env.example` to `.env` beside the executable to use environment variables.
-
-CLI:
-
-Linux:
-
-```bash
-./pia-scrap 5522
-```
-
-Windows:
-
-```powershell
-.\pia-scrap.exe 5522
-```
-
-GUI:
-
-Linux:
-
-```bash
-./pia-scrap-gui
-```
-
-Windows:
-
-```powershell
-.\pia-scrap-gui.exe
-```
+Ready-to-use compiled binaries (Windows and Linux) for both CLI and GUI are available under the GitHub Releases section.
 
 To build the CLI executable locally, install PyInstaller and run:
 
@@ -247,14 +212,13 @@ Mode behavior summary:
 
 ### Desktop GUI
 
-Run a modern desktop GUI application with all CLI options exposed through a graphical interface:
+Run the desktop GUI application:
 
 ```bash
-pip install -r requirements-gui.txt
 pia --gui
 ```
 
-The GUI provides a modern dark-themed interface with:
+The GUI provides a clean, modern interface with:
 - Novel Selection: Enter novel IDs or load from a queue file
 - Authentication: Email/password login (optional if already logged in)
 - Output Options: Output directory, format (EPUB/TXT), language, chapter images
@@ -266,10 +230,9 @@ The GUI provides a modern dark-themed interface with:
 
 ### Web app
 
-Run a compact local dashboard from a browser:
+Run the local web dashboard:
 
 ```bash
-pip install -r requirements-web.txt
 pia --web
 ```
 
@@ -352,9 +315,8 @@ output/<title>/<title>.epub or output/<title>/<episode-title>.txt
 This repo uses `ruff` for linting and `pytest` for tests.
 
 ```bash
-pip install -r requirements-web.txt -e ".[dev]"
-ruff check .
-pytest            # runs the full suite (pythonpath is configured in pyproject.toml)
+ruff check
+pytest
 ```
 
 ---
