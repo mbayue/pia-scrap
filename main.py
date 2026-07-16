@@ -3,9 +3,9 @@ import os
 import sys
 
 if sys.stdout is not None:
-    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[union-attr]
 if sys.stderr is not None:
-    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[union-attr]
 
 
 def should_pause_on_usage_error(argv: list[str], is_frozen: bool, os_name: str) -> bool:

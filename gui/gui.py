@@ -2,9 +2,9 @@ import os
 import sys
 
 if sys.stdout is not None:
-    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[union-attr]
 if sys.stderr is not None:
-    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore[union-attr]
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -17,6 +17,7 @@ if os.environ.get("GOOEY") == "1":
         def __init__(self, *args, **kwargs):
             sys.stdout.write("[debug] PatchedTqdm instantiated\n")
             sys.stdout.flush()
+
             class DummyFile:
                 def write(self, x):
                     pass
@@ -43,9 +44,9 @@ if os.environ.get("GOOEY") == "1":
     tqdm.tqdm = PatchedTqdm
     for name, module in list(sys.modules.items()):
         if name.startswith("tqdm"):
-            if hasattr(module, "tqdm") and module.tqdm is not PatchedTqdm:
+            if hasattr(module, "tqdm") and getattr(module, "tqdm") is not PatchedTqdm:
                 try:
-                    module.tqdm = PatchedTqdm
+                    setattr(module, "tqdm", PatchedTqdm)
                 except AttributeError:
                     pass
 
