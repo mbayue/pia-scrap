@@ -22,11 +22,13 @@ def main() -> None:
     if "--gui" in sys.argv or "-gui" in sys.argv:
         sys.argv = [arg for arg in sys.argv if arg not in ("--gui", "-gui")]
         from gui.gui import main as run_gui
+
         run_gui()
         return
 
     if "--web" in sys.argv or "-web" in sys.argv:
         import uvicorn
+
         is_frozen = getattr(sys, "frozen", False)
         uvicorn.run("web.web:app", host="127.0.0.1", port=8000, reload=not is_frozen)
         return
