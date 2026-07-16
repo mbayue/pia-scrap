@@ -102,7 +102,10 @@ jobs:
 
       - name: Install build dependencies (Linux GUI)
         if: matrix.name == 'gui-linux'
-        run: python3 -m pip install -r ${{ matrix.requirements }} pyinstaller
+        run: |
+          grep -v "Gooey" ${{ matrix.requirements }} > temp-requirements.txt
+          python3 -m pip install -r temp-requirements.txt Pillow colored psutil pyinstaller
+          python3 -m pip install --no-deps Gooey
 
       - name: Build executable
         if: matrix.name != 'gui-linux'
