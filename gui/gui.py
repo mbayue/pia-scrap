@@ -13,8 +13,6 @@ from gooey.gui.containers.application import GooeyApplication
 from gooey.gui.util import wx_util
 from wx.adv import TaskBarIcon
 
-from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue
-
 if os.environ.get("GOOEY") == "1":
 
     class PatchedTqdm(tqdm.tqdm):
@@ -43,6 +41,9 @@ if os.environ.get("GOOEY") == "1":
                 sys.stdout.flush()
 
     tqdm.tqdm = PatchedTqdm
+
+# fmt: skip
+from src.runner import CliUsageError, build_queue_request, print_queue_summary, run_queue  # noqa: E402
 
 original_init = gooey_footer.Footer.__init__
 
