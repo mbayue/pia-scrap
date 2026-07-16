@@ -6,6 +6,12 @@ Create EPUB or TXT output from Novelpia novels using Novelpia's API. Given one o
 
 ---
 
+## What's new in 2.9.0
+
+* Desktop GUI client (run with `--gui`) featuring a polished interface, start/stop task controls, and custom layouts.
+* Consolidated `main.py` entrypoint (installed as the `pia` command) supporting CLI, `--gui`, and `--web` modes.
+* Reorganized file structure separating client scripts into `gui/` and `web/` folders.
+
 ## What's new in 2.8.0
 
 * `-img` fetches chapter images with the episode's signed CloudFront key, caches them, and adds them to the EPUB. Chapter, About, and table-of-contents pages use the book stylesheet.
@@ -13,12 +19,6 @@ Create EPUB or TXT output from Novelpia novels using Novelpia's API. Given one o
 * The web dashboard validates job options before starting a worker.
 * CI runs mypy and pytest. API test doubles satisfy Pyright/Pylance without suppressions.
 
-## What's new in 2.7.0
-
-* `-w` and web workers work with free and unknown accounts. They unlock ads per chapter and stop at the first premium chapter in list order.
-* `requirements.txt` installs only the CLI dependencies. Use `requirements-web.txt` or `pip install -e ".[web]"` for the dashboard.
-* CI runs lint and tests on pushes and pull requests to `master`.
-* Removed the unused `HTTP_LOG` flag and stopped tracking local `novels.txt` queues.
 
 ## Features
 
@@ -53,19 +53,44 @@ Create EPUB or TXT output from Novelpia novels using Novelpia's API. Given one o
 * Python 3.10+
 * Core packages: `requests`, `beautifulsoup4`, `ebooklib`, `tqdm`, `python-dotenv`, `PySocks`, `lxml`
 * Web dashboard (optional): `fastapi`, `uvicorn`
+* Desktop GUI (optional): `Gooey`
 
-Install packages (CLI only):
+## Setup & Installation
 
-```bash
-pip install -r requirements.txt
-```
+1. **Create a virtual environment `.venv`**:
+   ```bash
+   python -m venv .venv
+   ```
 
-Install packages including the web dashboard:
+2. **Activate the virtual environment**:
+   * **Windows (PowerShell)**:
+     ```powershell
+     .\.venv\Scripts\Activate.ps1
+     ```
+   * **Linux/macOS**:
+     ```bash
+     source .venv/bin/activate
+     ```
 
-```bash
-pip install -r requirements-web.txt
-# or: pip install -e ".[web]"
-```
+3. **Install the package in editable mode**:
+   * **CLI only**:
+     ```bash
+     pip install -e .
+     ```
+   * **With Web app dashboard**:
+     ```bash
+     pip install -e ".[web]"
+     ```
+   * **With Desktop GUI client**:
+     ```bash
+     pip install -e ".[gui]"
+     ```
+   * **All (with dev tools)**:
+     ```bash
+     pip install -e ".[web,gui,dev]"
+     ```
+
+This registers the global **`pia`** script command inside your active virtual environment.
 
 ---
 
@@ -75,8 +100,12 @@ Tagged releases include:
 
 * `pia-scrap-linux.zip`
 * `pia-scrap-windows.zip`
+* `pia-scrap-gui-linux.zip`
+* `pia-scrap-gui-windows.zip`
 
 Each zip contains the executable, `README.md`, and `.env.example`. Copy `.env.example` to `.env` beside the executable to use environment variables.
+
+CLI:
 
 Linux:
 
@@ -90,11 +119,32 @@ Windows:
 .\pia-scrap.exe 5522
 ```
 
-To build the same executable locally, install PyInstaller and run:
+GUI:
+
+Linux:
+
+```bash
+./pia-scrap-gui
+```
+
+Windows:
+
+```powershell
+.\pia-scrap-gui.exe
+```
+
+To build the CLI executable locally, install PyInstaller and run:
 
 ```bash
 pip install -r requirements.txt pyinstaller
 pyinstaller --clean --noconfirm pia-scrap.spec
+```
+
+To build the GUI executable locally, install PyInstaller and run:
+
+```bash
+pip install -r requirements-gui.txt pyinstaller
+pyinstaller --clean --noconfirm pia-scrap-gui.spec
 ```
 
 The executable is written to `dist/`.
@@ -104,11 +154,11 @@ The executable is written to `dist/`.
 ## CLI
 
 ```text
-python main.py [NOVEL_ID ...] [-q FILE] [-u EMAIL] [-p PASSWORD]
-                   [-out DIR | -o DIR] [-max N]
-                   [-start START_CHAPTER] [-end END_CHAPTER]
-                   [-lang en] [-proxy URL] [-t SECONDS]
-                    [-w N] [-up] [-r] [-v] [-img] [-txt]
+pia [NOVEL_ID ...] [-q FILE] [-u EMAIL] [-p PASSWORD]
+    [-out DIR | -o DIR] [-max N]
+    [-start START_CHAPTER] [-end END_CHAPTER]
+    [-lang en] [-proxy URL] [-t SECONDS]
+     [-w N] [-up] [-r] [-v] [-img] [-txt]
 ```
 
 Arguments
@@ -137,19 +187,19 @@ Arguments
 1. First run with your Novelpia credentials (tokens are persisted to `.api.json`; see the `-u`/`-p` note above about `.env`):
 
    ```bash
-   python main.py 5522 -u you@example.com -p "your-password"
+   pia 5522 -u you@example.com -p "your-password"
    ```
 
 2. Subsequent runs can reuse stored tokens (no password on the command line):
 
    ```bash
-   python main.py 5522
+   pia 5522
    ```
 
 3. Update an ongoing novel later without redownloading cached chapters:
 
    ```bash
-   python main.py 5522 -up
+   pia 5522 -up
    ```
 
    If a long normal download is cancelled or crashes, rerun the same novel with `-up`. Chapters already saved in `.cache/` are skipped, and only missing chapters are fetched.
@@ -157,13 +207,13 @@ Arguments
 4. Include chapter images and cache their bytes for later rebuilds:
 
    ```bash
-   python main.py 5522 -img
+   pia 5522 -img
    ```
 
 5. Queue multiple novels with the same options:
 
    ```bash
-   python main.py 5522 5760 -up
+   pia 5522 5760 -up
    ```
 
 6. Keep an update queue in a text file:
@@ -175,7 +225,7 @@ Arguments
    ```
 
    ```bash
-   python main.py -q novels.txt -up
+   pia -q novels.txt -up
    ```
 
    Queued runs print a final summary showing each novel ID, status, chapter count, and title or error.
@@ -184,7 +234,7 @@ Arguments
 7. Retry only chapters that failed during a previous run:
 
    ```bash
-   python main.py 5522 -r
+   pia 5522 -r
    ```
 
 Mode behavior summary:
@@ -195,13 +245,32 @@ Mode behavior summary:
 | `-up` | Missing selected chapters only | Skips cached chapters, fetches missing ones | Resuming interrupted long runs; updating ongoing novels |
 | `-r` | Episodes listed in `failed_chapters.jsonl` only | Rebuilds from cached chapters plus retried successes | Retrying failed chapters without redownloading everything |
 
+### Desktop GUI
+
+Run a modern desktop GUI application with all CLI options exposed through a graphical interface:
+
+```bash
+pip install -r requirements-gui.txt
+pia --gui
+```
+
+The GUI provides a modern dark-themed interface with:
+- Novel Selection: Enter novel IDs or load from a queue file
+- Authentication: Email/password login (optional if already logged in)
+- Output Options: Output directory, format (EPUB/TXT), language, chapter images
+- Chapter Range: Limit which chapters to download
+- Download Options: Workers, throttle, update mode, retry failed
+- Advanced Options: Proxy settings and debug logging
+- Real-time progress bar and log output
+- Start/Stop controls for download management
+
 ### Web app
 
 Run a compact local dashboard from a browser:
 
 ```bash
 pip install -r requirements-web.txt
-python -m uvicorn web_app:app --reload
+pia --web
 ```
 
 Open `http://127.0.0.1:8000`, paste novel IDs or Novelpia novel URLs, then start an EPUB job. The web UI polls progress, shows logs, keeps recent jobs in the browser, and downloads each finished EPUB once.

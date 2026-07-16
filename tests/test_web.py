@@ -4,7 +4,7 @@ from fastapi import HTTPException
 
 from src import web_jobs as web_jobs_module
 from src.web_jobs import UnsafeDownloadPathError, downloadable_path
-from web_app import (
+from web.web import (
     MAX_CONCURRENT_JOBS,
     MAX_STORED_JOBS,
     JobRequest,
@@ -71,7 +71,7 @@ def test_prune_finished_jobs_preserves_active_jobs():
 
 
 def test_create_job_and_get_job_without_starting_worker(monkeypatch):
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     _drain_semaphore()
     with jobs_lock:
         jobs.clear()
@@ -87,7 +87,7 @@ def test_create_job_and_get_job_without_starting_worker(monkeypatch):
 
 
 def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     _drain_semaphore()
     with jobs_lock:
         jobs.clear()
@@ -102,7 +102,7 @@ def test_create_job_returns_existing_active_job_for_same_novel(monkeypatch):
 
 
 def test_create_job_creates_new_job_for_partial_batch_overlap(monkeypatch):
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     _drain_semaphore()
     with jobs_lock:
         jobs.clear()
@@ -118,7 +118,7 @@ def test_create_job_creates_new_job_for_partial_batch_overlap(monkeypatch):
 
 
 def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch):
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     _drain_semaphore()
     with jobs_lock:
         jobs.clear()
@@ -135,7 +135,7 @@ def test_create_job_rejects_malformed_input_without_starting_worker(monkeypatch)
 
 
 def test_create_job_rejects_invalid_options_before_starting_worker(monkeypatch):
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     _drain_semaphore()
     with jobs_lock:
         jobs.clear()
@@ -159,14 +159,14 @@ def test_index_serves_template_html():
 
 
 def web_app_routes():
-    from web_app import app
+    from web.web import app
 
     return app.routes
 
 
 def test_list_jobs_returns_all_jobs(monkeypatch):
     _drain_semaphore()
-    monkeypatch.setattr("web_app.threading.Thread", DummyThread)
+    monkeypatch.setattr("web.web.threading.Thread", DummyThread)
     with jobs_lock:
         jobs.clear()
 
@@ -182,7 +182,7 @@ def test_list_jobs_returns_all_jobs(monkeypatch):
 def test_download_serves_finished_file_inside_project(monkeypatch, tmp_path):
     out_file = tmp_path / "book.epub"
     out_file.write_text("epub", encoding="utf-8")
-    monkeypatch.setattr("web_app.os.getcwd", lambda: str(tmp_path))
+    monkeypatch.setattr("web.web.os.getcwd", lambda: str(tmp_path))
     with jobs_lock:
         jobs.clear()
         jobs["job"] = job_state("done", "2000-01-01T00:00:00")
@@ -208,7 +208,7 @@ def test_download_rejects_file_outside_project(monkeypatch, tmp_path):
     outside = tmp_path / "outside.epub"
     project.mkdir()
     outside.write_text("epub", encoding="utf-8")
-    monkeypatch.setattr("web_app.os.getcwd", lambda: str(project))
+    monkeypatch.setattr("web.web.os.getcwd", lambda: str(project))
     with jobs_lock:
         jobs.clear()
         jobs["job"] = job_state("done", "2000-01-01T00:00:00")

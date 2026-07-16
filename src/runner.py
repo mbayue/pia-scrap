@@ -136,7 +136,10 @@ def load_queue_file(path: str) -> list[int]:
 
 
 def build_queue_request(args: argparse.Namespace) -> QueueRequest:
-    novel_ids = list(args.novel_ids)
+    try:
+        novel_ids = [_parse_novel_token(item) for item in args.novel_ids]
+    except ValueError as e:
+        raise CliUsageError(f"invalid novel_id or novel URL: {e}") from None
     for queue_path in args.queue:
         try:
             novel_ids.extend(load_queue_file(queue_path))

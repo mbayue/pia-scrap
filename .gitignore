@@ -32,6 +32,7 @@ MANIFEST
 *.manifest
 *.spec
 !pia-scrap.spec
+!pia-scrap-gui.spec
 
 # Installer logs
 pip-log.txt

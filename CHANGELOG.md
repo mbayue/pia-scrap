@@ -2,6 +2,19 @@
 
 This file records notable PIA Scrap changes.
 
+## [2.9.0] - 2026-07-16
+
+### Added
+
+- Desktop GUI client (`pia --gui`) using Gooey, featuring automatic theme alignment, custom styling, and layout controls.
+- Consolidated `main.py` entrypoint (pip-exposed as the `pia` command) supporting CLI, `--gui`, and `--web` modes.
+- Explicit PyInstaller spec settings to bundle the GUI's `languages` and `assets` assets.
+
+### Changed
+
+- Reorganized project directory structures (`gui/` for Desktop client, `web/` for Web dashboard).
+- Renamed web app file to `web.py` and tests to `test_web.py`.
+
 ## [2.8.0] - 2026-07-14
 
 ### Added
